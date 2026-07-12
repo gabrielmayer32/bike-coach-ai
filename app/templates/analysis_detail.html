@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analysis — {{ activity.name if activity else analysis.activity_id }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #1a1a1a; font-size: 14px; }
+  header { background: #1a1a1a; color: #fff; padding: 0 24px; display: flex; align-items: stretch; }
+  .nav-brand { font-size: 15px; font-weight: 600; padding: 16px 20px 16px 0; color: #fff; text-decoration: none; border-right: 1px solid #333; margin-right: 4px; }
+  .nav-athlete { padding: 0 4px; display: flex; align-items: center; }
+  .nav-athlete a { display: block; padding: 18px 14px; font-size: 13px; color: #aaa; text-decoration: none; border-bottom: 3px solid transparent; }
+  .nav-athlete a:hover { color: #fff; }
+  .nav-athlete a.active { color: #fff; border-bottom-color: #fff; }
+  .container { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+  .section { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .section h2 { font-size: 14px; font-weight: 600; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; }
+  .verdict-badge { display: inline-flex; align-items: center; justify-content: center; padding: 4px 16px; border-radius: 14px; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+  .verdict-well { background: #d1fae5; color: #065f46; }
+  .verdict-okay { background: #fef3c7; color: #92400e; }
+  .verdict-poor { background: #fee2e2; color: #991b1b; }
+  .message-box { background: #f9f9f9; border-left: 3px solid #1a1a1a; padding: 16px; border-radius: 0 6px 6px 0; line-height: 1.6; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .metric-tile { border: 1px solid #e5e5e5; border-radius: 6px; padding: 12px; }
+  .metric-tile .label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+  .metric-tile .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+  .metric-tile .sub { font-size: 11px; color: #aaa; }
+  .obs-list { list-style: none; }
+  .obs-list li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+  .obs-list li:last-child { border-bottom: none; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+  .history-item { padding: 8px 0; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; gap: 12px; }
+  .history-item:last-child { border-bottom: none; }
+  .cost-row { font-size: 12px; color: #888; display: flex; gap: 16px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <a class="nav-brand" href="/">Bike Coach AI</a>
+  <nav class="nav-athlete">
+    {% for a in athletes %}
+    <a href="/athlete/{{ a.id }}" class="{{ 'active' if athlete and a.id == athlete.id else '' }}">{{ a.name }}</a>
+    {% endfor %}
+    <a href="/">All analyses</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- Verdict + message -->
+  <div class="section">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div class="verdict-badge verdict-{{ analysis.verdict }}">{{ analysis.verdict }}</div>
+      {% if analysis.escalate_flag %}
+      <div style="font-size:12px;background:#fee2e2;color:#991b1b;border-radius:4px;padding:3px 8px;">
+        ⚠ Escalate — {{ analysis.escalate_reason }}
+      </div>
+      {% endif %}
+      <div style="margin-left:auto;font-size:12px;color:#888;">
+        {{ analysis.created_at.strftime('%d %b %Y %H:%M') }}
+        {% if activity %} · {{ activity.session_type }}{% endif %}
+      </div>
+    </div>
+    <div class="message-box">{{ analysis.athlete_message }}</div>
+  </div>
+
+  <!-- Key metrics -->
+  {% if activity %}
+  <div class="section">
+    <h2>Metrics</h2>
+    <div class="metrics-grid">
+      {% if activity.avg_power_W %}
+      <div class="metric-tile">
+        <div class="label">Avg Power</div>
+        <div class="value">{{ activity.avg_power_W|int }}<span style="font-size:14px;font-weight:400">W</span></div>
+      </div>
+      {% endif %}
+      {% if activity.np_W %}
+      <div class="metric-tile">
+        <div class="label">NP</div>
+        <div class="value">{{ activity.np_W|int }}<span style="font-size:14px;font-weight:400">W</span></div>
+      </div>
+      {% endif %}
+      {% if activity.if_value %}
+      <div class="metric-tile">
+        <div class="label">IF</div>
+        <div class="value">{{ "%.2f"|format(activity.if_value) }}</div>
+      </div>
+      {% endif %}
+      {% if activity.tss %}
+      <div class="metric-tile">
+        <div class="label">TSS</div>
+        <div class="value">{{ activity.tss|int }}</div>
+      </div>
+      {% endif %}
+      {% if activity.decoupling_pct %}
+      <div class="metric-tile">
+        <div class="label">Decoupling</div>
+        <div class="value">{{ "%.1f"|format(activity.decoupling_pct) }}<span style="font-size:14px;font-weight:400">%</span></div>
+      </div>
+      {% endif %}
+      {% if activity.rep_fade_pct %}
+      <div class="metric-tile">
+        <div class="label">Rep Fade</div>
+        <div class="value">{{ "%.1f"|format(activity.rep_fade_pct) }}<span style="font-size:14px;font-weight:400">%</span></div>
+      </div>
+      {% endif %}
+      {% if activity.duration_s %}
+      <div class="metric-tile">
+        <div class="label">Duration</div>
+        <div class="value">{{ activity.duration_s // 60 }}<span style="font-size:14px;font-weight:400">min</span></div>
+      </div>
+      {% endif %}
+      {% if activity.kj %}
+      <div class="metric-tile">
+        <div class="label">Energy</div>
+        <div class="value">{{ activity.kj|int }}<span style="font-size:14px;font-weight:400">kJ</span></div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Key observations -->
+  {% if analysis.key_observations %}
+  <div class="section">
+    <h2>Key Observations</h2>
+    <ul class="obs-list">
+      {% for obs in analysis.key_observations %}
+      <li>{{ obs }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <!-- Reasoning -->
+  {% if analysis.reasoning %}
+  <div class="section">
+    <h2>Coaching Reasoning</h2>
+    <p style="line-height:1.6;color:#555;">{{ analysis.reasoning }}</p>
+  </div>
+  {% endif %}
+
+  <!-- Reanalysis history -->
+  {% if all_analyses|length > 1 %}
+  <div class="section">
+    <h2>Analysis History ({{ all_analyses|length }} versions)</h2>
+    {% for prev in all_analyses %}
+    <div class="history-item">
+      <div class="verdict-badge verdict-{{ prev.verdict }}" style="width:60px;font-size:11px;">{{ prev.verdict }}</div>
+      <div style="font-size:12px;color:#888;">{{ prev.created_at.strftime('%d %b %Y %H:%M') }}</div>
+      <a href="/analysis/{{ prev.id }}" style="font-size:12px;color:#1a1a1a;text-decoration:none;">View →</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- Cost & debug -->
+  <div class="section">
+    <h2>AI Call Details</h2>
+    <div class="cost-row">
+      <span>Model: {{ analysis.model }}</span>
+      <span>Input tokens: {{ analysis.input_tokens }}</span>
+      <span>Output tokens: {{ analysis.output_tokens }}</span>
+      <span>Cache read: {{ analysis.cache_read_tokens }}</span>
+      <span>Cache write: {{ analysis.cache_write_tokens }}</span>
+      <span><strong>Cost: ${{ "%.6f"|format(analysis.cost_usd) }}</strong></span>
+    </div>
+    <details style="margin-top:12px;">
+      <summary style="cursor:pointer;font-size:12px;color:#888;">Input summary (debug)</summary>
+      <pre>{{ analysis.input_summary_json | tojson(indent=2) }}</pre>
+    </details>
+  </div>
+
+</div>
+</body>
+</html>
