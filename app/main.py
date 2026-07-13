@@ -27,6 +27,18 @@ log = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="app/templates")
 
+def _fmt_duration(seconds) -> str:
+    if not seconds:
+        return "—"
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m}:{sec:02d}"
+
+templates.env.filters["duration"] = _fmt_duration
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -109,7 +121,7 @@ def athlete_activities(request: Request, athlete_id: str, days: int = 30):
                 "date": str(act.get("start_date_local", ""))[:10],
                 "name": act.get("name", ""),
                 "type": act.get("type", ""),
-                "duration_min": round(act.get("moving_time", 0) / 60) if act.get("moving_time") else None,
+                "duration_s": act.get("moving_time"),
                 "tss": act.get("icu_training_load"),
                 "avg_power": act.get("icu_average_watts"),
                 "np": act.get("icu_weighted_avg_watts"),
@@ -218,6 +230,22 @@ def update_athlete_profile(
         return RedirectResponse(f"/athlete/{athlete_id}", status_code=303)
     finally:
         db.close()
+
+
+# ── Fitness & power data (JSON feeds for charts) ──────────────────────────────
+
+@app.get("/api/athlete/{athlete_id}/fitness")
+def athlete_fitness(athlete_id: str, days: int = 90):
+    since = date.today() - timedelta(days=days)
+    data = icu.get_wellness_range(athlete_id, since=since)
+    return JSONResponse(data)
+
+
+@app.get("/api/athlete/{athlete_id}/power-curve")
+def athlete_power_curve(athlete_id: str, days: int = 90):
+    since = date.today() - timedelta(days=days)
+    data = icu.get_power_curve_range(athlete_id, since=since)
+    return JSONResponse(data)
 
 
 # ── Webhook stub ──────────────────────────────────────────────────────────────

@@ -216,52 +216,122 @@ def _extract_interval_list(
     detail: dict, streams: dict, ftp: float
 ) -> list[dict]:
     """
-    Attempt to extract per-interval metrics from lap markers.
-    interval_summary from Intervals.icu is a list of human-readable strings
-    (e.g. "1x 4m40s 210w") — not structured. We parse those into lightweight
-    dicts for the AI's context rather than stream-sliced details.
-    Falls back to empty list if nothing useful is available.
+    Extract per-lap metrics with full stream-derived stats (HR, cadence, NP, VI).
+    Priority:
+      1. Device laps — structured, set by athlete on their GPS/trainer
+      2. ICU interval_summary — auto-detected; sliced against streams for real metrics.
+         Discarded if durations vary wildly (terrain noise, not structured efforts).
     """
-    interval_summary = detail.get("interval_summary")
-    if not interval_summary:
-        return []
+    import re
 
-    # If it's a list of strings like ["1x 86s 214w", ...], parse them
-    items = interval_summary if isinstance(interval_summary, list) else []
+    watts_s = streams.get("watts", [])
+    hr_s = streams.get("heartrate", [])
+    cad_s = streams.get("cadence", [])
+
+    def _slice_stats(start: int, end: int) -> dict:
+        w = [v for v in watts_s[start:end] if v is not None]
+        h = [v for v in hr_s[start:end] if v is not None]
+        c = [v for v in cad_s[start:end] if v is not None and v > 0]
+        avg_w = round(sum(w) / len(w), 1) if w else None
+        np_w = _normalised_power_slice(watts_s[start:end])
+        vi = round(np_w / avg_w, 3) if np_w and avg_w else None
+        return {
+            "avg_power_W": avg_w,
+            "np_W": np_w,
+            "vi": vi,
+            "avg_hr_bpm": round(sum(h) / len(h), 1) if h else None,
+            "avg_cadence_rpm": round(sum(c) / len(c), 1) if c else None,
+        }
+
+    # ── Device laps ────────────────────────────────────────────────────────────
+    laps = detail.get("laps") or []
+    if laps and isinstance(laps, list) and isinstance(laps[0], dict):
+        parsed = []
+        cursor = 0
+        for lap in laps:
+            dur = lap.get("elapsed_time") or lap.get("moving_time") or 0
+            stats = _slice_stats(cursor, cursor + dur) if watts_s else {}
+            # Prefer API-provided metrics; fill gaps from stream slice
+            avg_w = lap.get("average_watts") or lap.get("avg_power") or stats.get("avg_power_W")
+            np_w = lap.get("normalized_power") or lap.get("weighted_average_watts") or stats.get("np_W")
+            avg_hr = lap.get("average_heartrate") or lap.get("avg_hr") or stats.get("avg_hr_bpm")
+            avg_cad = lap.get("average_cadence") or stats.get("avg_cadence_rpm")
+            vi = round(np_w / avg_w, 3) if np_w and avg_w else None
+            parsed.append({
+                "duration_s": dur,
+                "avg_power_W": float(avg_w) if avg_w else None,
+                "np_W": float(np_w) if np_w else None,
+                "vi": vi,
+                "avg_hr_bpm": avg_hr,
+                "avg_cadence_rpm": avg_cad,
+            })
+            cursor += dur
+        return parsed
+
+    # ── ICU interval_summary strings ───────────────────────────────────────────
+    items = detail.get("interval_summary") or []
     if not items or not isinstance(items[0], str):
         return []
 
-    parsed = []
-    import re
+    # Parse all entries first so we can check for terrain noise before slicing
+    entries: list[tuple[int, int]] = []  # (dur_s, stated_power_w)
     for entry in items:
-        # Pattern: "Nx Ym Zs Pw" or "Nx Zs Pw" — flexible
         m = re.search(r'(\d+)x\s+((?:\d+m)?\s*(?:\d+s)?)\s+(\d+)w', entry)
         if not m:
             continue
         count = int(m.group(1))
-        duration_str = m.group(2).strip()
-        power_w = int(m.group(3))
-
-        # Parse duration
+        ds = m.group(2).strip()
+        pw = int(m.group(3))
         dur_s = 0
-        mm = re.search(r'(\d+)m', duration_str)
-        ss = re.search(r'(\d+)s', duration_str)
-        if mm:
-            dur_s += int(mm.group(1)) * 60
-        if ss:
-            dur_s += int(ss.group(1))
-
+        mm = re.search(r'(\d+)m', ds)
+        ss = re.search(r'(\d+)s', ds)
+        if mm: dur_s += int(mm.group(1)) * 60
+        if ss: dur_s += int(ss.group(1))
         for _ in range(count):
-            parsed.append({
-                "duration_s": dur_s,
-                "avg_power_W": float(power_w),
-                "np_W": None,
-                "avg_hr_bpm": None,
-                "avg_cadence_rpm": None,
-                "vi": None,
-            })
+            entries.append((dur_s, pw))
+
+    if not entries:
+        return []
+
+    # Discard if durations vary wildly — terrain segments, not structured reps
+    durations = [e[0] for e in entries]
+    if len(durations) >= 3:
+        max_dur = max(durations)
+        min_dur = max(min(durations), 1)
+        if max_dur / min_dur > 10:
+            return []
+
+    # Slice streams using warmup offset + cumulative durations
+    warmup_s = detail.get("icu_warmup_time") or 0
+    cursor = warmup_s
+    parsed = []
+    for dur_s, stated_pw in entries:
+        stats = _slice_stats(cursor, cursor + dur_s)
+        parsed.append({
+            "duration_s": dur_s,
+            "avg_power_W": stats["avg_power_W"],
+            "np_W": stats["np_W"],
+            "vi": stats["vi"],
+            "avg_hr_bpm": stats["avg_hr_bpm"],
+            "avg_cadence_rpm": stats["avg_cadence_rpm"],
+        })
+        cursor += dur_s
 
     return parsed
+
+
+def _normalised_power_slice(watts: list) -> float | None:
+    """30-second rolling average NP for a stream slice."""
+    clean = [w if w is not None else 0 for w in watts]
+    if len(clean) < 30:
+        return None
+    window = 30
+    rolling = [
+        sum(clean[i:i + window]) / window
+        for i in range(len(clean) - window + 1)
+    ]
+    np_val = (sum(r ** 4 for r in rolling) / len(rolling)) ** 0.25
+    return round(np_val, 1)
 
 
 def _extract_target_power(planned: dict | None) -> float | None:

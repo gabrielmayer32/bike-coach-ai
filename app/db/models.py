@@ -76,6 +76,15 @@ class Activity(Base):
 
     fetched_at = Column(DateTime, default=datetime.utcnow)
 
+    @property
+    def display_name(self) -> str:
+        """Prescribed workout name when available, else athlete's activity name."""
+        if self.session_summary_json:
+            planned = self.session_summary_json.get("planned_workout") or {}
+            if planned.get("name"):
+                return planned["name"]
+        return self.name or ""
+
     athlete = relationship("Athlete", back_populates="activities")
     analyses = relationship("Analysis", back_populates="activity", lazy="dynamic")
 

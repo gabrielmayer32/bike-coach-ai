@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Analysis — {{ activity.name if activity else analysis.activity_id }}</title>
+<title>Analysis — {{ activity.display_name if activity else analysis.activity_id }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #1a1a1a; font-size: 14px; }
@@ -109,7 +109,7 @@
       {% if activity.duration_s %}
       <div class="metric-tile">
         <div class="label">Duration</div>
-        <div class="value">{{ activity.duration_s // 60 }}<span style="font-size:14px;font-weight:400">min</span></div>
+        <div class="value" style="font-size:18px;">{{ activity.duration_s | duration }}</div>
       </div>
       {% endif %}
       {% if activity.kj %}

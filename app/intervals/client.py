@@ -164,6 +164,59 @@ def get_wellness(athlete_id: str, on_date: date) -> dict | None:
     return _get(f"/athlete/{athlete_id}/wellness/{on_date.isoformat()}")
 
 
+def get_wellness_range(athlete_id: str, since: date, until: date | None = None) -> list[dict]:
+    """Return daily CTL/ATL/TSB/rampRate entries for a date range."""
+    until = until or date.today()
+    rows = _get(
+        f"/athlete/{athlete_id}/wellness",
+        params={"oldest": since.isoformat(), "newest": until.isoformat()},
+    ) or []
+    result = []
+    for r in rows:
+        ctl = r.get("ctl")
+        atl = r.get("atl")
+        result.append({
+            "date": r["id"],
+            "ctl": round(ctl, 1) if ctl else None,
+            "atl": round(atl, 1) if atl else None,
+            "tsb": round(ctl - atl, 1) if ctl and atl else None,
+            "ramp_rate": round(r["rampRate"], 1) if r.get("rampRate") else None,
+        })
+    return result
+
+
+def get_power_curve_range(athlete_id: str, since: date, until: date | None = None) -> dict:
+    """
+    Return the best-effort power curve for a date range.
+    Returns {secs: [...], watts: [...], w_per_kg: [...], ftp: int|None}.
+    """
+    until = until or date.today()
+    data = _get(
+        f"/athlete/{athlete_id}/power-curves",
+        params={
+            "oldest": since.isoformat(),
+            "newest": until.isoformat(),
+            "type": "Ride",
+        },
+    )
+    if not data or not data.get("list"):
+        return {"secs": [], "watts": [], "w_per_kg": [], "ftp": None}
+
+    curve = data["list"][0]
+    ftp = None
+    for model in (curve.get("powerModels") or []):
+        if model.get("ftp"):
+            ftp = model["ftp"]
+            break
+
+    return {
+        "secs": curve.get("secs", []),
+        "watts": curve.get("watts", []),
+        "w_per_kg": curve.get("watts_per_kg", []),
+        "ftp": ftp,
+    }
+
+
 # ── Athlete profile / power curve ─────────────────────────────────────────────
 
 def get_athlete_profile(athlete_id: str) -> dict | None:

@@ -76,7 +76,7 @@
 
       <div>
         <div class="card-name">
-          {{ act.name if act else a.activity_id }}
+          {{ act.display_name if act else a.activity_id }}
           <span style="font-weight:400;color:#aaa;font-size:12px;"> · {{ act.athlete_id if act else '' }}</span>
         </div>
         <div class="card-meta">
@@ -89,7 +89,7 @@
           {% if act.if_value %}<div class="metric"><strong>{{ "%.2f"|format(act.if_value) }}</strong> IF</div>{% endif %}
           {% if act.tss %}<div class="metric"><strong>{{ act.tss|int }}</strong> TSS</div>{% endif %}
           {% if act.decoupling_pct %}<div class="metric"><strong>{{ "%.1f"|format(act.decoupling_pct) }}%</strong> decoupling</div>{% endif %}
-          {% if act.duration_s %}<div class="metric"><strong>{{ act.duration_s // 60 }}min</strong></div>{% endif %}
+          {% if act.duration_s %}<div class="metric"><strong>{{ act.duration_s | duration }}</strong></div>{% endif %}
         </div>
         {% endif %}
         <div class="card-message">{{ a.athlete_message }}</div>

@@ -171,40 +171,54 @@ def stop_scheduler() -> None:
 def _classify_session(summary: dict) -> str:
     """
     Heuristic classifier — maps an activity to one of the coaching_config session_types.
-    Uses activity name, IF, zone time breakdown, and trainer flag.
-    Extend this as needed; it does not need to be perfect for v1.
+    Priority: activity name keywords (most reliable for this athlete population whose
+    names encode the prescription) → physiological signals → IF fallback.
     """
     name = (summary.get("name") or "").lower()
     if_val = summary.get("if_value") or 0
-    is_indoor = summary.get("is_indoor", False)
-    zone_times = summary.get("zone_times_s", {})
     avg_cad = summary.get("avg_cadence_rpm") or 0
 
-    # Keyword matching on activity name (athletes often use standard names)
-    keyword_map = {
-        "recovery": "recovery",
-        "easy": "recovery",
-        "z1": "recovery",
-        "endurance": "endurance_z2",
-        "base": "endurance_z2",
-        "zone 2": "endurance_z2",
-        "z2": "endurance_z2",
-        "tempo": "tempo",
-        "z3": "tempo",
-        "sweet spot": "threshold",
-        "sweetspot": "threshold",
-        "threshold": "threshold",
-        "ftp": "threshold",
-        "over under": "over_unders",
-        "over-under": "over_unders",
-        "vo2": "vo2max",
-        "vo2max": "vo2max",
-        "sprint": "sprint_neuromuscular",
-        "neuromuscular": "sprint_neuromuscular",
-        "torque": "torque",
-        "low cadence": "torque",
-    }
-    for keyword, session_type in keyword_map.items():
+    # Ordered from most specific to least — first match wins.
+    # Longer / more specific phrases must come before shorter ones that overlap.
+    keyword_map = [
+        # VO2 / SIT (supramaximal)
+        ("sit",                  "vo2max"),
+        ("vo2",                  "vo2max"),
+        ("short intense",        "vo2max"),
+        # Over-unders
+        ("over under",           "over_unders"),
+        ("over-under",           "over_unders"),
+        # Torque / low-cadence
+        ("torque",               "torque"),
+        ("low cadence",          "torque"),
+        ("force",                "torque"),
+        # Threshold / sweet spot
+        ("threshold",            "threshold"),
+        ("sweet spot",           "threshold"),
+        ("sweetspot",            "threshold"),
+        ("lt2",                  "threshold"),
+        ("ftp",                  "threshold"),
+        # Tempo / LT1
+        ("tempo",                "tempo"),
+        ("lt1",                  "tempo"),
+        ("z3",                   "tempo"),
+        # Sprints / neuromuscular
+        ("sprint",               "sprint_neuromuscular"),
+        ("neuromuscular",        "sprint_neuromuscular"),
+        ("torq+sprint",          "sprint_neuromuscular"),
+        # Endurance / Z2
+        ("aerobic endurance",    "endurance_z2"),
+        ("endurance",            "endurance_z2"),
+        ("zone 2",               "endurance_z2"),
+        ("z2",                   "endurance_z2"),
+        ("base",                 "endurance_z2"),
+        # Recovery
+        ("recovery",             "recovery"),
+        ("easy",                 "recovery"),
+        ("high cadence",         "recovery"),   # high-cadence recovery ride
+        ("z1",                   "recovery"),
+    ]
+    for keyword, session_type in keyword_map:
         if keyword in name:
             return session_type
 
@@ -212,7 +226,7 @@ def _classify_session(summary: dict) -> str:
     if avg_cad and 40 <= avg_cad <= 65 and if_val > 0.7:
         return "torque"
 
-    # Fall back on IF ranges
+    # IF-based fallback when name gives no signal
     if if_val < 0.55:
         return "recovery"
     if if_val < 0.76:

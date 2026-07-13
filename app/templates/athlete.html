@@ -146,6 +146,41 @@
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #f59e0b; border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .analysing-tag { font-size: 11px; color: #92400e; display: flex; align-items: center; gap: 5px; }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 2px solid #e5e5e5; }
+  .tab-btn {
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #888;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    cursor: pointer;
+  }
+  .tab-btn:hover { color: #333; }
+  .tab-btn.active { color: #1a1a1a; border-bottom-color: #1a1a1a; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── Charts ── */
+  .chart-wrap {
+    background: #fff;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 20px 20px 12px;
+    margin-bottom: 16px;
+  }
+  .chart-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: #888; margin-bottom: 14px; }
+  .chart-svg { width: 100%; overflow: visible; }
+  .chart-legend { display: flex; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #666; }
+  .legend-dot { width: 10px; height: 3px; border-radius: 2px; }
+  .chart-loading { text-align: center; color: #bbb; padding: 60px 0; font-size: 13px; }
+  .chart-range { display: flex; gap: 6px; margin-bottom: 12px; }
+  .chart-range .pill { font-size: 11px; padding: 3px 10px; }
 </style>
 </head>
 <body>
@@ -194,75 +229,120 @@
     </button>
   </div>
 
-  <!-- Controls -->
-  <div class="controls">
-    <span class="controls-label">Last</span>
-    {% for d in [7, 14, 30, 60, 90] %}
-    <a href="/athlete/{{ athlete.id }}?days={{ d }}" class="pill {{ 'active' if days == d else '' }}">{{ d }}d</a>
-    {% endfor %}
-    <span class="refresh-note">↻ auto-refreshes when analysis completes</span>
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('activities')">Activities</button>
+    <button class="tab-btn" onclick="switchTab('fitness')">Fitness</button>
+    <button class="tab-btn" onclick="switchTab('power')">Power</button>
   </div>
 
-  <!-- Activity table -->
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Activity</th>
-          <th>Duration</th>
-          <th>Avg W</th>
-          <th>NP</th>
-          <th>TSS</th>
-          <th>Verdict</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% if activity_rows %}
-          {% for row in activity_rows %}
-          <tr id="row-{{ row.id }}">
-            <td class="mono">{{ row.date }}</td>
-            <td>
-              <div class="act-name">{{ row.name or '—' }}</div>
-              <div class="act-type">
-                {{ row.type }}
-                {% if row.source == 'STRAVA' %}<span class="strava-tag">Strava</span>{% endif %}
-              </div>
-            </td>
-            <td>{{ row.duration_min }}min</td>
-            <td>{{ row.avg_power|int if row.avg_power else '—' }}</td>
-            <td>{{ row.np|int if row.np else '—' }}</td>
-            <td>{{ row.tss|int if row.tss else '—' }}</td>
-            <td>
-              {% if row.analysis %}
-                <a href="/analysis/{{ row.analysis.id }}" class="verdict-pill verdict-{{ row.analysis.verdict }}">{{ row.analysis.verdict }}</a>
-                {% if row.analysis.escalate_flag %}<span class="escalate-dot" title="Escalation flagged"></span>{% endif %}
-              {% else %}
-                <span style="color:#ddd;">—</span>
-              {% endif %}
-            </td>
-            <td>
-              <div class="act-actions" id="actions-{{ row.id }}">
-                {% if row.source == 'STRAVA' %}
-                  <span style="font-size:11px;color:#ccc;">No streams</span>
-                {% elif row.analysis %}
-                  <a href="/analysis/{{ row.analysis.id }}" class="btn btn-sm">View</a>
-                  <form method="post" action="/athlete/{{ athlete.id }}/reanalyse/{{ row.id }}">
-                    <button type="submit" class="btn btn-sm">Re-run</button>
-                  </form>
-                {% else %}
-                  <button class="btn btn-dark btn-sm" onclick="triggerAnalyse('{{ athlete.id }}', '{{ row.id }}', this)">Analyse</button>
-                {% endif %}
-              </div>
-            </td>
+  <!-- ── Tab: Activities ── -->
+  <div class="tab-panel active" id="tab-activities">
+    <div class="controls">
+      <span class="controls-label">Last</span>
+      {% for d in [7, 14, 30, 60, 90] %}
+      <a href="/athlete/{{ athlete.id }}?days={{ d }}" class="pill {{ 'active' if days == d else '' }}">{{ d }}d</a>
+      {% endfor %}
+      <span class="refresh-note">↻ auto-refreshes when analysis completes</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Activity</th>
+            <th>Duration</th>
+            <th>Avg W</th>
+            <th>NP</th>
+            <th>TSS</th>
+            <th>Verdict</th>
+            <th></th>
           </tr>
-          {% endfor %}
-        {% else %}
-          <tr><td colspan="8" class="no-data">No activities in the last {{ days }} days.</td></tr>
-        {% endif %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% if activity_rows %}
+            {% for row in activity_rows %}
+            <tr id="row-{{ row.id }}">
+              <td class="mono">{{ row.date }}</td>
+              <td>
+                <div class="act-name">{{ row.name or '—' }}</div>
+                <div class="act-type">
+                  {{ row.type }}
+                  {% if row.source == 'STRAVA' %}<span class="strava-tag">Strava</span>{% endif %}
+                </div>
+              </td>
+              <td>{{ row.duration_s | duration }}</td>
+              <td>{{ row.avg_power|int if row.avg_power else '—' }}</td>
+              <td>{{ row.np|int if row.np else '—' }}</td>
+              <td>{{ row.tss|int if row.tss else '—' }}</td>
+              <td>
+                {% if row.analysis %}
+                  <a href="/analysis/{{ row.analysis.id }}" class="verdict-pill verdict-{{ row.analysis.verdict }}">{{ row.analysis.verdict }}</a>
+                  {% if row.analysis.escalate_flag %}<span class="escalate-dot" title="Escalation flagged"></span>{% endif %}
+                {% else %}
+                  <span style="color:#ddd;">—</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="act-actions" id="actions-{{ row.id }}">
+                  {% if row.source == 'STRAVA' %}
+                    <span style="font-size:11px;color:#ccc;">No streams</span>
+                  {% elif row.analysis %}
+                    <a href="/analysis/{{ row.analysis.id }}" class="btn btn-sm">View</a>
+                    <form method="post" action="/athlete/{{ athlete.id }}/reanalyse/{{ row.id }}">
+                      <button type="submit" class="btn btn-sm">Re-run</button>
+                    </form>
+                  {% else %}
+                    <button class="btn btn-dark btn-sm" onclick="triggerAnalyse('{{ athlete.id }}', '{{ row.id }}', this)">Analyse</button>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr><td colspan="8" class="no-data">No activities in the last {{ days }} days.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Tab: Fitness ── -->
+  <div class="tab-panel" id="tab-fitness">
+    <div class="chart-wrap">
+      <div class="chart-title">Fitness — CTL / Fatigue — ATL / Form — TSB</div>
+      <div class="chart-range" id="fitness-range">
+        <button class="pill active" onclick="loadFitness(42, this)">6w</button>
+        <button class="pill" onclick="loadFitness(90, this)">3m</button>
+        <button class="pill" onclick="loadFitness(180, this)">6m</button>
+        <button class="pill" onclick="loadFitness(365, this)">1y</button>
+      </div>
+      <div id="fitness-chart"><div class="chart-loading">Loading…</div></div>
+      <div class="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#3b82f6;height:3px"></div> CTL (Fitness)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f97316;height:3px"></div> ATL (Fatigue)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#22c55e;height:3px"></div> TSB (Form)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tab: Power ── -->
+  <div class="tab-panel" id="tab-power">
+    <div class="chart-wrap">
+      <div class="chart-title">Power Curve — Best efforts</div>
+      <div class="chart-range" id="power-range">
+        <button class="pill active" onclick="loadPower(42, this)">6w</button>
+        <button class="pill" onclick="loadPower(90, this)">3m</button>
+        <button class="pill" onclick="loadPower(180, this)">6m</button>
+        <button class="pill" onclick="loadPower(365, this)">1y</button>
+      </div>
+      <div id="power-chart"><div class="chart-loading">Loading…</div></div>
+      <div class="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6;height:3px"></div> Watts</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ec4899;height:3px"></div> W/kg</div>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -319,6 +399,182 @@
 </div>
 
 <script>
+// ── Tab switching ──────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    const panels = ['activities', 'fitness', 'power'];
+    b.classList.toggle('active', panels[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'tab-' + name);
+  });
+  if (name === 'fitness' && !fitnessLoaded) loadFitness(42, document.querySelector('#fitness-range .pill'));
+  if (name === 'power' && !powerLoaded) loadPower(42, document.querySelector('#power-range .pill'));
+}
+
+// ── Tiny SVG chart helpers ────────────────────────────────────────────────────
+function svgLine(points, color, width) {
+  if (!points.length) return '';
+  const d = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+function svgArea(points, color) {
+  if (!points.length) return '';
+  const bottom = points[0][1] > 0 ? points[0][1] : 200;
+  const d = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')
+    + ` L${points[points.length-1][0].toFixed(1)},${bottom} L${points[0][0].toFixed(1)},${bottom} Z`;
+  return `<path d="${d}" fill="${color}" opacity="0.08"/>`;
+}
+
+function makeScale(vals, rangeMin, rangeMax, pad) {
+  const lo = Math.min(...vals) - pad, hi = Math.max(...vals) + pad;
+  return v => rangeMin + (rangeMax - rangeMin) * (1 - (v - lo) / (hi - lo));
+}
+
+function xTicks(dates, W, pad) {
+  const n = dates.length;
+  if (!n) return '';
+  let out = '';
+  const step = Math.ceil(n / 6);
+  for (let i = 0; i < n; i += step) {
+    const x = pad + (W - 2*pad) * i / (n - 1);
+    const label = dates[i].slice(5); // MM-DD
+    out += `<text x="${x.toFixed(1)}" y="0" font-size="10" fill="#bbb" text-anchor="middle">${label}</text>`;
+  }
+  return `<g transform="translate(0,${195})">${out}</g>`;
+}
+
+function yLabel(val, y, pad) {
+  return `<text x="${pad - 6}" y="${y.toFixed(1)}" font-size="10" fill="#bbb" text-anchor="end" dominant-baseline="middle">${Math.round(val)}</text>`;
+}
+
+// ── Fitness chart ─────────────────────────────────────────────────────────────
+let fitnessLoaded = false;
+
+function loadFitness(days, btn) {
+  document.querySelectorAll('#fitness-range .pill').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('fitness-chart').innerHTML = '<div class="chart-loading">Loading…</div>';
+
+  fetch(`/api/athlete/${ATHLETE_ID}/fitness?days=${days}`)
+    .then(r => r.json())
+    .then(rows => {
+      fitnessLoaded = true;
+      const W = 800, H = 210, pad = 48;
+      const dates = rows.map(r => r.date);
+      const ctls  = rows.map(r => r.ctl  ?? null);
+      const atls  = rows.map(r => r.atl  ?? null);
+      const tsbs  = rows.map(r => r.tsb  ?? null);
+
+      const allVals = [...ctls, ...atls, ...tsbs].filter(v => v !== null);
+      if (!allVals.length) { document.getElementById('fitness-chart').innerHTML = '<div class="chart-loading">No data</div>'; return; }
+
+      const lo = Math.min(...allVals), hi = Math.max(...allVals);
+      const scaleY = v => pad/2 + (H - pad) * (1 - (v - lo) / (hi - lo));
+      const scaleX = i => pad + (W - 2*pad) * i / (Math.max(dates.length - 1, 1));
+
+      const pts = (arr) => arr.map((v, i) => v !== null ? [scaleX(i), scaleY(v)] : null).filter(Boolean);
+
+      // Y grid lines
+      let grid = '';
+      const gridVals = [lo, (lo+hi)/2, hi].map(v => Math.round(v));
+      gridVals.forEach(gv => {
+        const gy = scaleY(gv);
+        grid += `<line x1="${pad}" y1="${gy.toFixed(1)}" x2="${W-pad/2}" y2="${gy.toFixed(1)}" stroke="#f0f0f0" stroke-width="1"/>`;
+        grid += yLabel(gv, gy, pad);
+      });
+
+      // Zero line for TSB
+      if (lo < 0 && hi > 0) {
+        const zy = scaleY(0);
+        grid += `<line x1="${pad}" y1="${zy.toFixed(1)}" x2="${W-pad/2}" y2="${zy.toFixed(1)}" stroke="#e5e5e5" stroke-dasharray="4,3" stroke-width="1"/>`;
+      }
+
+      const svg = `<svg class="chart-svg" viewBox="0 0 ${W} ${H+20}" preserveAspectRatio="none">
+        ${grid}
+        ${svgArea(pts(ctls), '#3b82f6')}
+        ${svgLine(pts(ctls), '#3b82f6', 2)}
+        ${svgLine(pts(atls), '#f97316', 2)}
+        ${svgArea(pts(tsbs), '#22c55e')}
+        ${svgLine(pts(tsbs), '#22c55e', 1.5)}
+        ${xTicks(dates, W, pad)}
+      </svg>`;
+
+      document.getElementById('fitness-chart').innerHTML = svg;
+    })
+    .catch(() => { document.getElementById('fitness-chart').innerHTML = '<div class="chart-loading">Failed to load</div>'; });
+}
+
+// ── Power curve chart ─────────────────────────────────────────────────────────
+let powerLoaded = false;
+
+const DURATION_LABELS = {1:'1s',5:'5s',10:'10s',30:'30s',60:'1m',120:'2m',300:'5m',600:'10m',1200:'20m',3600:'1h'};
+
+function loadPower(days, btn) {
+  document.querySelectorAll('#power-range .pill').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('power-chart').innerHTML = '<div class="chart-loading">Loading…</div>';
+
+  fetch(`/api/athlete/${ATHLETE_ID}/power-curve?days=${days}`)
+    .then(r => r.json())
+    .then(data => {
+      powerLoaded = true;
+      const secs = data.secs || [], watts = data.watts || [], wkg = data.w_per_kg || [];
+      if (!secs.length) { document.getElementById('power-chart').innerHTML = '<div class="chart-loading">No power data</div>'; return; }
+
+      const W = 800, H = 210, pad = 48;
+
+      // Log scale for X (durations span 1s – 3600s)
+      const logMin = Math.log10(secs[0] || 1), logMax = Math.log10(secs[secs.length-1] || 3600);
+      const scaleX = s => pad + (W - 2*pad) * (Math.log10(s) - logMin) / (logMax - logMin);
+
+      // Two Y axes: watts (left) and w/kg (right) — share same pixel scale for simplicity
+      const validW = watts.filter(Boolean), validK = wkg.filter(Boolean);
+      const wLo = Math.min(...validW), wHi = Math.max(...validW);
+      const scaleYW = v => pad/2 + (H - pad) * (1 - (v - wLo) / (wHi - wLo));
+      const kLo = Math.min(...validK), kHi = Math.max(...validK);
+      const scaleYK = v => pad/2 + (H - pad) * (1 - (v - kLo) / (kHi - kLo));
+
+      const ptsW = secs.map((s, i) => watts[i] ? [scaleX(s), scaleYW(watts[i])] : null).filter(Boolean);
+      const ptsK = secs.map((s, i) => wkg[i]   ? [scaleX(s), scaleYK(wkg[i])]   : null).filter(Boolean);
+
+      // Grid + X labels at key durations
+      let grid = '', xlabels = '';
+      [1,5,30,60,300,600,1200,3600].forEach(s => {
+        if (s < secs[0] || s > secs[secs.length-1]) return;
+        const x = scaleX(s);
+        grid += `<line x1="${x.toFixed(1)}" y1="${pad/2}" x2="${x.toFixed(1)}" y2="${H-pad/2}" stroke="#f0f0f0" stroke-width="1"/>`;
+        xlabels += `<text x="${x.toFixed(1)}" y="0" font-size="10" fill="#bbb" text-anchor="middle">${DURATION_LABELS[s]||''}</text>`;
+      });
+      grid += `<g transform="translate(0,${H-pad/2+12})">${xlabels}</g>`;
+
+      // Y labels (left = watts)
+      [wLo, (wLo+wHi)/2, wHi].forEach(v => {
+        grid += yLabel(v, scaleYW(v), pad);
+      });
+
+      // FTP marker
+      let ftpLine = '';
+      if (data.ftp) {
+        const fy = scaleYW(data.ftp);
+        ftpLine = `<line x1="${pad}" y1="${fy.toFixed(1)}" x2="${W-pad/2}" y2="${fy.toFixed(1)}" stroke="#3b82f6" stroke-dasharray="5,4" stroke-width="1.5"/>
+          <text x="${W-pad/2+4}" y="${fy.toFixed(1)}" font-size="10" fill="#3b82f6" dominant-baseline="middle">FTP ${data.ftp}W</text>`;
+      }
+
+      const svg = `<svg class="chart-svg" viewBox="0 0 ${W} ${H+20}" preserveAspectRatio="none">
+        ${grid}
+        ${ftpLine}
+        ${svgArea(ptsW, '#8b5cf6')}
+        ${svgLine(ptsW, '#8b5cf6', 2)}
+        ${svgLine(ptsK, '#ec4899', 1.5)}
+      </svg>`;
+
+      document.getElementById('power-chart').innerHTML = svg;
+    })
+    .catch(() => { document.getElementById('power-chart').innerHTML = '<div class="chart-loading">Failed to load</div>'; });
+}
+
 const ATHLETE_ID = "{{ athlete.id }}";
 const STORAGE_KEY = "analysing_" + ATHLETE_ID;
 const TIMEOUT_MS = 3 * 60 * 1000;
