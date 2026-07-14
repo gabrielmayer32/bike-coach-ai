@@ -118,6 +118,36 @@
         <div class="value">{{ activity.kj|int }}<span style="font-size:14px;font-weight:400">kJ</span></div>
       </div>
       {% endif %}
+      {% if activity.avg_hr_bpm %}
+      <div class="metric-tile">
+        <div class="label">Avg HR</div>
+        <div class="value">{{ activity.avg_hr_bpm|int }}<span style="font-size:14px;font-weight:400">bpm</span></div>
+      </div>
+      {% endif %}
+      {% if activity.avg_cadence_rpm %}
+      <div class="metric-tile">
+        <div class="label">Avg Cadence</div>
+        <div class="value">{{ activity.avg_cadence_rpm|int }}<span style="font-size:14px;font-weight:400">rpm</span></div>
+      </div>
+      {% endif %}
+      {% if activity.vi %}
+      <div class="metric-tile">
+        <div class="label">VI</div>
+        <div class="value">{{ "%.2f"|format(activity.vi) }}</div>
+      </div>
+      {% endif %}
+      {% if activity.rpe %}
+      <div class="metric-tile">
+        <div class="label">RPE</div>
+        <div class="value">{{ activity.rpe|int }}<span style="font-size:14px;font-weight:400">/10</span></div>
+      </div>
+      {% endif %}
+      {% if activity.temp_c %}
+      <div class="metric-tile">
+        <div class="label">Temp</div>
+        <div class="value">{{ activity.temp_c|int }}<span style="font-size:14px;font-weight:400">°C</span></div>
+      </div>
+      {% endif %}
     </div>
   </div>
   {% endif %}

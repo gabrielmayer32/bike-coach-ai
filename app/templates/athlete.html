@@ -290,9 +290,7 @@
                     <span style="font-size:11px;color:#ccc;">No streams</span>
                   {% elif row.analysis %}
                     <a href="/analysis/{{ row.analysis.id }}" class="btn btn-sm">View</a>
-                    <form method="post" action="/athlete/{{ athlete.id }}/reanalyse/{{ row.id }}">
-                      <button type="submit" class="btn btn-sm">Re-run</button>
-                    </form>
+                    <button class="btn btn-sm" onclick="triggerReanalyse('{{ athlete.id }}', '{{ row.id }}', {{ row.analysis.id }})">Re-run</button>
                   {% else %}
                     <button class="btn btn-dark btn-sm" onclick="triggerAnalyse('{{ athlete.id }}', '{{ row.id }}', this)">Analyse</button>
                   {% endif %}
@@ -597,6 +595,20 @@ function saveInflight(arr) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
 }
 
+function triggerReanalyse(athleteId, activityId, currentAnalysisId) {
+  const inflight = getInflight().filter(x => x.id !== activityId);
+  inflight.push({id: activityId, startedAt: Date.now()});
+  saveInflight(inflight);
+
+  document.getElementById("actions-" + activityId).innerHTML = spinnerHTML();
+  document.getElementById("row-" + activityId).classList.add("analysing-row");
+
+  fetch("/athlete/" + athleteId + "/reanalyse/" + activityId, { method: "POST" })
+    .catch(() => {});
+
+  pollForResult(activityId, currentAnalysisId);
+}
+
 function triggerAnalyse(athleteId, activityId) {
   const inflight = getInflight().filter(x => x.id !== activityId);
   inflight.push({id: activityId, startedAt: Date.now()});
@@ -612,8 +624,9 @@ function triggerAnalyse(athleteId, activityId) {
   pollForResult(activityId);
 }
 
-function pollForResult(activityId) {
-  fetch("/api/analysis-status/" + activityId)
+function pollForResult(activityId, afterId) {
+  const url = "/api/analysis-status/" + activityId + (afterId != null ? "?after_id=" + afterId : "");
+  fetch(url)
     .then(r => r.json())
     .then(data => {
       if (data.done) {
@@ -628,10 +641,10 @@ function pollForResult(activityId) {
         const rowEl = document.getElementById("row-" + activityId);
         if (rowEl) rowEl.classList.remove("analysing-row");
       } else {
-        setTimeout(() => pollForResult(activityId), 4000);
+        setTimeout(() => pollForResult(activityId, afterId), 4000);
       }
     })
-    .catch(() => setTimeout(() => pollForResult(activityId), 4000));
+    .catch(() => setTimeout(() => pollForResult(activityId, afterId), 4000));
 }
 
 // On page load: restore spinners and resume polling for any pending jobs

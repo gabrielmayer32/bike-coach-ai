@@ -121,6 +121,16 @@ def get_events_for_date(athlete_id: str, on_date: date) -> list[dict]:
     return data or []
 
 
+def get_events_range(athlete_id: str, since: date, until: date | None = None) -> list[dict]:
+    """Return all calendar events in a date range."""
+    until = until or date.today()
+    data = _get(
+        f"/athlete/{athlete_id}/events",
+        params={"oldest": since.isoformat(), "newest": until.isoformat()},
+    )
+    return data or []
+
+
 def get_planned_workout(athlete_id: str, activity_detail: dict) -> dict | None:
     """
     Try to find the planned workout that matches a completed activity.

@@ -46,6 +46,22 @@ def analyse_session(
     wellness = session_summary.get("wellness", {})
     athlete_context = build_athlete_context(athlete_db_record, wellness)
 
+    # Fill gaps in athlete context from the session summary (ICU values are authoritative)
+    for field, summary_key in [
+        ("ftp_W", "ftp_W"),
+        ("lthr_bpm", "lthr_bpm"),
+        ("max_hr_bpm", "athlete_max_hr"),
+        ("weight_kg", "wellness.weight_kg"),
+    ]:
+        if not athlete_context.get(field):
+            val = (
+                session_summary.get("wellness", {}).get("weight_kg")
+                if summary_key == "wellness.weight_kg"
+                else session_summary.get(summary_key)
+            )
+            if val:
+                athlete_context[field] = val
+
     system_prompt = build_system_prompt()
     user_message = build_user_message(session_summary, athlete_context, similar_sessions)
 

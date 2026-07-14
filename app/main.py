@@ -111,15 +111,48 @@ def athlete_activities(request: Request, athlete_id: str, days: int = 30):
         since = date.today() - timedelta(days=days)
         raw_activities = icu.list_activities(athlete_id, since=since)
 
+        # Fetch planned workouts for the whole range in one call
+        # Build: {date_str: {event_id: name, ..., "__first__": name}}
+        events = icu.get_events_range(athlete_id, since=since)
+        planned_by_date: dict[str, dict] = {}
+        for e in events:
+            if not (e.get("type") == "Workout" or e.get("category") == "WORKOUT"):
+                continue
+            edate = str(e.get("start_date_local", "") or e.get("start_date", ""))[:10]
+            if not edate:
+                continue
+            name = e.get("name") or e.get("description", "")
+            if not name:
+                continue
+            if edate not in planned_by_date:
+                planned_by_date[edate] = {"__first__": name}
+            planned_by_date[edate][str(e.get("id", ""))] = name
+
         # For each activity, look up whether we already have an analysis
         activity_rows = []
         for act in raw_activities:
             act_id = str(act.get("id", ""))
             existing = crud.get_latest_analysis(db, act_id) if act_id else None
+            act_date = str(act.get("start_date_local", ""))[:10]
+
+            # Prescribed name: from calendar event (paired first, else first workout that day)
+            prescribed_name = None
+            day_events = planned_by_date.get(act_date, {})
+            if day_events:
+                paired_id = str(act.get("paired_event_id", "") or "")
+                prescribed_name = day_events.get(paired_id) or day_events.get("__first__")
+
+            # Fall back to DB session_summary_json if already analysed
+            if not prescribed_name:
+                act_db = db.get(crud.Activity, act_id) if act_id else None
+                if act_db and act_db.session_summary_json:
+                    planned = act_db.session_summary_json.get("planned_workout") or {}
+                    prescribed_name = planned.get("name") or None
+
             activity_rows.append({
                 "id": act_id,
-                "date": str(act.get("start_date_local", ""))[:10],
-                "name": act.get("name", ""),
+                "date": act_date,
+                "name": prescribed_name or act.get("name", ""),
                 "type": act.get("type", ""),
                 "duration_s": act.get("moving_time"),
                 "tss": act.get("icu_training_load"),
@@ -160,20 +193,32 @@ def analyse_activity(athlete_id: str, activity_id: str):
 
 @app.post("/athlete/{athlete_id}/reanalyse/{activity_id}")
 def reanalyse_activity(athlete_id: str, activity_id: str):
-    poller.reanalyse_activity(activity_id)
-    return RedirectResponse(f"/athlete/{athlete_id}", status_code=303)
+    _failed_activity_ids.discard(activity_id)
+
+    def _run():
+        result = poller.reanalyse_activity(activity_id)
+        if not result:
+            _failed_activity_ids.add(activity_id)
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"status": "started"}, status_code=202)
 
 
 # ── Analysis status poll (used by JS to know when background job is done) ─────
 
 @app.get("/api/analysis-status/{activity_id}")
-def analysis_status(activity_id: str):
+def analysis_status(activity_id: str, after_id: Optional[int] = None):
     if activity_id in _failed_activity_ids:
         return JSONResponse({"done": False, "failed": True})
     db = get_session()
     try:
         analysis = crud.get_latest_analysis(db, activity_id)
-        return JSONResponse({"done": analysis is not None})
+        if after_id is not None:
+            # Re-run: wait until a newer analysis exists
+            done = analysis is not None and analysis.id != after_id
+        else:
+            done = analysis is not None
+        return JSONResponse({"done": done})
     finally:
         db.close()
 

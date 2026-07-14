@@ -50,9 +50,9 @@ def build_system_prompt() -> str:
         "",
         "## Voice and Feedback Style",
         voice["tone"],
-        f"Target length: {voice['feedback_length_sentences']} sentences.",
+        f"**LENGTH: EXACTLY {voice['feedback_length_sentences']} sentences. No more. Count before you finish.**",
         "",
-        "### Feedback structure (follow in order):",
+        "### Feedback structure (3 steps, one sentence each):",
     ]
     for step in voice["structure"]:
         parts.append(f"{step['step']}. **{step['label'].upper()}**: {step['instruction']}")
