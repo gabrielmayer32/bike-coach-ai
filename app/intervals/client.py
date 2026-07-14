@@ -116,7 +116,12 @@ def get_events_for_date(athlete_id: str, on_date: date) -> list[dict]:
     """Return calendar events (planned workouts) for a single date."""
     data = _get(
         f"/athlete/{athlete_id}/events",
-        params={"oldest": on_date.isoformat(), "newest": on_date.isoformat()},
+        params={
+            "oldest": on_date.isoformat(),
+            "newest": on_date.isoformat(),
+            "resolve": "true",
+            "intervals": "true",
+        },
     )
     return data or []
 
@@ -126,7 +131,12 @@ def get_events_range(athlete_id: str, since: date, until: date | None = None) ->
     until = until or date.today()
     data = _get(
         f"/athlete/{athlete_id}/events",
-        params={"oldest": since.isoformat(), "newest": until.isoformat()},
+        params={
+            "oldest": since.isoformat(),
+            "newest": until.isoformat(),
+            "resolve": "true",
+            "intervals": "true",
+        },
     )
     return data or []
 
@@ -235,6 +245,28 @@ def get_athlete_profile(athlete_id: str) -> dict | None:
     if not data:
         return None
     return data.get("athlete", data)
+
+
+def configured_ftp_for_activity(
+    profile: dict | None,
+    activity_type: str,
+    is_indoor: bool,
+) -> float | None:
+    """Resolve configured Intervals FTP from the matching sport settings."""
+    if not profile:
+        return None
+    settings = profile.get("sportSettings") or profile.get("sport_settings") or []
+    activity_type_lower = (activity_type or "").lower()
+    for sport in settings:
+        types = [str(value).lower() for value in (sport.get("types") or [])]
+        sport_type = str(sport.get("type") or "").lower()
+        if activity_type_lower not in types and activity_type_lower != sport_type:
+            continue
+        if is_indoor and sport.get("indoor_ftp"):
+            return float(sport["indoor_ftp"])
+        if sport.get("ftp"):
+            return float(sport["ftp"])
+    return None
 
 
 def get_power_curve(athlete_id: str, start: date | None = None) -> dict | None:

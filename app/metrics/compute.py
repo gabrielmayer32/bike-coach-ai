@@ -120,9 +120,41 @@ def time_in_zones_from_stream(
         if w is None:
             continue
         pct = (w / ftp) * 100
-        for zone in zone_boundaries:
+        for index, zone in enumerate(zone_boundaries):
             lo, hi = zone["power_pct_ftp"]
-            if lo <= pct <= hi:
+            # Boundaries are continuous; an exact shared boundary belongs to
+            # the lower zone and every value above it belongs to the next.
+            epsilon = 1e-9
+            if lo - epsilon <= pct <= hi + epsilon and (
+                index == 0 or pct > lo + epsilon
+            ):
+                result[zone["name"]] += 1.0
+                break
+    return result
+
+
+def time_in_hr_zones_from_stream(
+    hr_stream: list[float | None],
+    lthr: float,
+    zone_boundaries: list[dict],
+) -> dict[str, float]:
+    """Compute seconds in configured LTHR zones from a 1 Hz HR stream."""
+    result = {z["name"]: 0.0 for z in zone_boundaries}
+    if not lthr:
+        return result
+    for hr in hr_stream:
+        if hr is None or hr <= 0:
+            continue
+        pct = (hr / lthr) * 100
+        for index, zone in enumerate(zone_boundaries):
+            bounds = zone.get("hr_pct_lthr")
+            if not bounds:
+                continue
+            lo, hi = bounds
+            epsilon = 1e-9
+            if lo - epsilon <= pct <= hi + epsilon and (
+                index == 0 or pct > lo + epsilon
+            ):
                 result[zone["name"]] += 1.0
                 break
     return result
@@ -137,6 +169,30 @@ def time_in_target_zone_pct(
         return None
     target = zone_times_secs.get(target_zone_name, 0.0)
     return round(target / total * 100, 1)
+
+
+def time_above_power_pct(
+    power_stream: list[float | None], ftp: float, threshold_pct: float
+) -> float:
+    """Return seconds at or above a percentage of FTP for a 1 Hz stream."""
+    if not ftp:
+        return 0.0
+    threshold = ftp * threshold_pct / 100
+    return float(sum(1 for power in power_stream if power is not None and power >= threshold))
+
+
+def longest_consecutive_above(
+    values: list[float | None], threshold: float
+) -> int:
+    """Longest consecutive run above a threshold in a 1 Hz stream."""
+    longest = current = 0
+    for value in values:
+        if value is not None and value > threshold:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
 
 
 # ── Interval Analysis ─────────────────────────────────────────────────────────

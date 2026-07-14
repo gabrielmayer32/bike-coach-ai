@@ -211,7 +211,7 @@
       {% endif %}
 
       {% if athlete.ftp_W %}
-      <div class="stat"><span class="val">{{ athlete.ftp_W|int }}W</span><span class="lbl">FTP</span></div>
+      <div class="stat"><span class="val">{{ athlete.ftp_W|int }}W</span><span class="lbl">FTP · Intervals.icu</span></div>
       {% endif %}
       {% if athlete.lthr_bpm %}
       <div class="stat"><span class="val">{{ athlete.lthr_bpm|int }}</span><span class="lbl">LTHR</span></div>
@@ -352,8 +352,8 @@
     <form method="post" action="/athletes/{{ athlete.id }}/profile">
       <div class="modal-grid">
         <div class="form-group">
-          <label>FTP (W)</label>
-          <input type="number" name="ftp_W" value="{{ athlete.ftp_W|int if athlete.ftp_W else '' }}" placeholder="e.g. 280">
+          <label>FTP</label>
+          <input type="text" value="{{ (athlete.ftp_W|int ~ ' W') if athlete.ftp_W else 'Not available from Intervals.icu' }}" disabled>
         </div>
         <div class="form-group">
           <label>LTHR (bpm)</label>

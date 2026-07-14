@@ -101,8 +101,12 @@ def get_similar_sessions(
     Return the last N analysed sessions of the same type for an athlete.
     Used to build the historical comparison context for the AI.
     """
-    cfg = get_coaching_config()
-    n = limit or cfg["historical_comparison"]["num_sessions"]
+    history_cfg = get_coaching_config()["historical_comparison"]
+    if not history_cfg["enabled"]:
+        return []
+    n = history_cfg["num_sessions"] if limit is None else limit
+    if n <= 0:
+        return []
 
     rows = (
         db.query(Activity, Analysis)
@@ -119,15 +123,16 @@ def get_similar_sessions(
 
     result = []
     for act, analysis in rows:
-        result.append({
-            "date": act.date,
-            "avg_power_W": act.avg_power_W,
-            "np_W": act.np_W,
-            "rep_fade_pct": act.rep_fade_pct,
-            "decoupling_pct": act.decoupling_pct,
-            "tss": act.tss,
-            "verdict": analysis.verdict,
-        })
+        item = {"date": act.date}
+        summary = act.session_summary_json or {}
+        for field in history_cfg["fields_to_compare"]:
+            if field == "verdict":
+                item[field] = analysis.verdict
+            elif hasattr(act, field):
+                item[field] = getattr(act, field)
+            else:
+                item[field] = summary.get(field)
+        result.append(item)
     return result
 
 

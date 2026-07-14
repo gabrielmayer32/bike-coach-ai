@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from app.config import get_settings
+from app.config import get_coaching_config_model, get_settings
 from app.db.models import Base
 from app.db.session import get_engine, get_session
 from app.db import crud
@@ -42,6 +42,8 @@ templates.env.filters["duration"] = _fmt_duration
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail startup with a clear validation error if the coach edited invalid YAML.
+    get_coaching_config_model()
     Base.metadata.create_all(bind=get_engine())
     _sync_athletes_from_icu()
     poller.start_scheduler()
@@ -253,7 +255,6 @@ def analysis_detail(request: Request, analysis_id: int):
 @app.post("/athletes/{athlete_id}/profile")
 def update_athlete_profile(
     athlete_id: str,
-    ftp_W: Optional[float] = Form(None),
     lthr_bpm: Optional[float] = Form(None),
     max_hr_bpm: Optional[float] = Form(None),
     weight_kg: Optional[float] = Form(None),
@@ -265,7 +266,7 @@ def update_athlete_profile(
     try:
         data = {"id": athlete_id}
         for field, val in [
-            ("ftp_W", ftp_W), ("lthr_bpm", lthr_bpm), ("max_hr_bpm", max_hr_bpm),
+            ("lthr_bpm", lthr_bpm), ("max_hr_bpm", max_hr_bpm),
             ("weight_kg", weight_kg), ("level", level),
             ("training_phase", training_phase), ("notes", notes),
         ]:
