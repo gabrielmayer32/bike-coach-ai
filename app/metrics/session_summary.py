@@ -114,6 +114,7 @@ def build_session_summary(
 
     # ── Peak powers ────────────────────────────────────────────────────────────
     peak_5s = compute.peak_power_for_duration(power_s, 5) if has_power else None
+    peak_30s = compute.peak_power_for_duration(power_s, 30) if has_power else None
     peak_60s = compute.peak_power_for_duration(power_s, 60) if has_power else None
     peak_300s = compute.peak_power_for_duration(power_s, 300) if has_power else None
 
@@ -192,6 +193,7 @@ def build_session_summary(
         "avg_cadence_rpm": avg_cad,
         # Peak powers
         "peak_5s_W": peak_5s,
+        "peak_30s_W": peak_30s,
         "peak_60s_W": peak_60s,
         "peak_300s_W": peak_300s,
         # RPE & subjective

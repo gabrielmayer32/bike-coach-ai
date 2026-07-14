@@ -181,12 +181,15 @@ session_types:
     target_zone: 1
     key_metrics: [avg_power, np, hr_zone_times, feel]
     well_executed: >
-      Athlete feels recovered. HR stays in Z1 throughout. NP close to avg power
-      (no power surges). No efforts above Z2. Athlete reports legs feeling better.
+      HR is the primary compliance signal for recovery rides — not power zone times.
+      HR stays in Z1/low-Z2 throughout. Brief, scattered power spikes (a short climb,
+      a surge to cross an intersection) are acceptable as long as HR does not sustain
+      above Z2. NP close to avg power. Athlete reports legs feeling better.
     red_flags:
-      - "HR above Z2 for any sustained period"
-      - "NP meaningfully higher than avg power — surging during what should be passive riding"
+      - "HR sustained above Z2 for several consecutive minutes — not just brief transient spikes"
+      - "NP meaningfully higher than avg power (indicates repeated or prolonged surging, not isolated efforts)"
       - "Athlete reports feeling worse after than before"
+      - "IMPORTANT: Power zone time totals on recovery rides are misleading — scattered short pushes (5-15s) accumulate into significant zone totals without any sustained physiological stress. Always cross-reference with HR zone times AND peak_30s_W. If HR stayed low and peak 30s power is below FTP, the athlete never held a sustained effort above Z2 — the ride was aerobically easy regardless of what the power zone breakdown shows."
 
   endurance_z2:
     label: "Endurance / Zone 2 Base"
@@ -374,6 +377,15 @@ context_modifiers:
     effect: >
       Even completing the session in difficult conditions can itself be a successful
       outcome. Acknowledge the effort before any technical feedback.
+
+  scattered_power_spikes:
+    trigger: "power zone times show time in Z3+ but HR zone times show HR stayed low (below Z2/Z3 HR)"
+    effect: >
+      Power zone totals are misleading when spikes are short and scattered — 5-15 second
+      surges accumulate into large zone totals but create no sustained physiological stress.
+      Cross-reference with HR zones. If HR stayed low throughout, treat the session as
+      aerobically easy regardless of the power zone breakdown. Do not flag scattered power
+      spikes as a compliance failure on recovery or Z2 rides.
 
 # ── ESCALATION RULES ──────────────────────────────────────────────────────────
 # These conditions should set escalate_to_coach = true in the AI output.
