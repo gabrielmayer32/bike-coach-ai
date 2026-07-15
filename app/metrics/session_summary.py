@@ -29,6 +29,15 @@ class SessionSummary(BaseModel):
     ftp_W: Optional[float]
     ftp_source: Literal["activity", "sport_settings", "missing"]
     session_type: Optional[str] = None
+    interval_source_policy: Literal["device_laps"] = "device_laps"
+    interval_source: Literal["device_laps", "missing"] = "missing"
+    interval_source_detail: Optional[
+        Literal["activity_laps", "icu_intervals_lap_mode"]
+    ] = None
+    interval_source_verified: bool = False
+    interval_metrics_available: bool = False
+    automatic_interval_detection_used: Literal[False] = False
+    incomplete_data_reason: Optional[str] = None
     power_zone_times_s: dict[str, float]
     hr_zone_times_s: dict[str, float]
     time_in_target_zone_pct: Optional[float] = None
@@ -163,6 +172,10 @@ def build_session_summary(
 
     # ── Interval / rep breakdown ───────────────────────────────────────────────
     interval_list = _extract_interval_list(detail, streams, ftp, target_power)
+    interval_source_detail = (
+        _device_lap_source_detail(detail) if interval_list else None
+    )
+    interval_source = "device_laps" if interval_source_detail else "missing"
     work_intervals = [interval for interval in interval_list if interval.get("is_work", True)]
     if step_targets and len(step_targets) in (1, len(work_intervals)):
         targets = step_targets * len(work_intervals) if len(step_targets) == 1 else step_targets
@@ -218,7 +231,7 @@ def build_session_summary(
 
     # ── Assemble summary ──────────────────────────────────────────────────────
     summary: dict[str, Any] = {
-        "summary_version": 2,
+        "summary_version": 3,
         # Identity
         "activity_id": activity_id,
         "athlete_id": athlete_id,
@@ -246,6 +259,17 @@ def build_session_summary(
         "target_duration_s": target_duration_s,
         "power_compliance_pct": compliance,
         # Rep breakdown
+        "interval_source": interval_source,
+        "interval_source_policy": cfg["interval_analysis"]["source"],
+        "interval_source_detail": interval_source_detail,
+        "interval_source_verified": interval_source == "device_laps",
+        "interval_metrics_available": bool(interval_list),
+        "automatic_interval_detection_used": cfg["interval_analysis"][
+            "allow_intervals_icu_detected"
+        ],
+        "incomplete_data_reason": (
+            None if interval_list else "device_laps_not_available"
+        ),
         "interval_count": len(work_intervals),
         "interval_powers_W": interval_powers,
         "interval_details": interval_list,
@@ -294,29 +318,80 @@ def _safe_mean(values: list) -> float | None:
     return round(sum(clean) / len(clean), 1) if clean else None
 
 
+def _activity_uses_device_laps(detail: dict) -> bool:
+    """Return true only when Intervals reports lap-based interval analysis."""
+    for key in (
+        "use_laps_for_power_intervals",
+        "use_laps_for_intervals",
+        "use_laps",
+    ):
+        if detail.get(key) is True:
+            return True
+    source = str(detail.get("interval_source") or "").strip().lower()
+    return source in {"device_laps", "laps", "fit_laps", "activity_laps"}
+
+
+def _has_meaningful_device_laps(laps: Any) -> bool:
+    """Ignore the single generic session lap present in many activity files."""
+    if not isinstance(laps, list) or not laps or not isinstance(laps[0], dict):
+        return False
+    if len(laps) > 1:
+        return True
+    lap = laps[0]
+    return any(
+        lap.get(key) is not None
+        for key in (
+            "wkt_step_index",
+            "workout_step_index",
+            "intensity",
+            "lap_type",
+            "label",
+            "name",
+        )
+    )
+
+
+def _device_lap_source_detail(detail: dict) -> str | None:
+    if _has_meaningful_device_laps(detail.get("laps")):
+        return "activity_laps"
+    intervals = detail.get("icu_intervals")
+    if (
+        _activity_uses_device_laps(detail)
+        and isinstance(intervals, list)
+        and intervals
+        and isinstance(intervals[0], dict)
+    ):
+        return "icu_intervals_lap_mode"
+    return None
+
+
+def _device_lap_payload(detail: dict) -> list[dict]:
+    source = _device_lap_source_detail(detail)
+    if source == "activity_laps":
+        return detail["laps"]
+    if source == "icu_intervals_lap_mode":
+        return detail["icu_intervals"]
+    return []
+
+
 def _extract_interval_list(
     detail: dict,
     streams: dict,
     ftp: float | None,
     target_power: float | None,
 ) -> list[dict]:
-    """
-    Extract per-lap metrics with full stream-derived stats (HR, cadence, NP, VI).
-    Priority:
-      1. Device laps — structured, set by athlete on their GPS/trainer
-      2. ICU interval_summary — auto-detected; sliced against streams for real metrics.
-         Discarded if durations vary wildly (terrain noise, not structured efforts).
-    """
-    import re
+    """Extract metrics only from verified device-lap boundaries."""
 
     watts_s = streams.get("watts", [])
     hr_s = streams.get("heartrate", [])
     cad_s = streams.get("cadence", [])
+    torque_s = streams.get("torque", [])
 
     def _slice_stats(start: int, end: int) -> dict:
         w = [v for v in watts_s[start:end] if v is not None]
         h = [v for v in hr_s[start:end] if v is not None]
         c = [v for v in cad_s[start:end] if v is not None and v > 0]
+        t = [v for v in torque_s[start:end] if v is not None]
         avg_w = round(sum(w) / len(w), 1) if w else None
         np_w = _normalised_power_slice(watts_s[start:end])
         vi = round(np_w / avg_w, 3) if np_w and avg_w else None
@@ -326,19 +401,36 @@ def _extract_interval_list(
             "vi": vi,
             "avg_hr_bpm": round(sum(h) / len(h), 1) if h else None,
             "avg_cadence_rpm": round(sum(c) / len(c), 1) if c else None,
+            "avg_torque_Nm": round(sum(t) / len(t), 1) if t else None,
             "within_rep_fade_pct": compute.within_rep_fade_pct(watts_s[start:end]),
+            "peak_5s_W": compute.peak_power_for_duration(watts_s[start:end], 5),
+            "peak_10s_W": compute.peak_power_for_duration(watts_s[start:end], 10),
+            "peak_15s_W": compute.peak_power_for_duration(watts_s[start:end], 15),
+            "peak_30s_W": compute.peak_power_for_duration(watts_s[start:end], 30),
         }
 
     def _is_work_lap(lap: dict) -> bool:
         if "is_work" in lap:
             return bool(lap["is_work"])
+        intensity = lap.get("intensity")
+        if isinstance(intensity, dict):
+            intensity = (
+                intensity.get("valueName")
+                or intensity.get("value_name")
+                or intensity.get("value")
+            )
         text = " ".join(
-            str(lap.get(key) or "") for key in ("name", "type", "lap_type")
+            str(value or "") for value in (
+                lap.get("name"), lap.get("label"), lap.get("type"),
+                lap.get("lap_type"), intensity,
+            )
         ).lower()
         return not any(word in text for word in ("warmup", "warm-up", "cooldown", "cool-down", "recovery", "rest"))
 
     # ── Device laps ────────────────────────────────────────────────────────────
-    laps = detail.get("laps") or []
+    # Intervals calculations are accepted only when their boundaries have been
+    # verified as device-lap based. Auto-detected intervals never reach here.
+    laps = _device_lap_payload(detail)
     if laps and isinstance(laps, list) and isinstance(laps[0], dict):
         parsed = []
         cursor = 0
@@ -352,76 +444,39 @@ def _extract_interval_list(
             np_w = lap.get("normalized_power") or lap.get("weighted_average_watts") or stats.get("np_W")
             avg_hr = lap.get("average_heartrate") or lap.get("avg_hr") or stats.get("avg_hr_bpm")
             avg_cad = lap.get("average_cadence") or stats.get("avg_cadence_rpm")
+            avg_torque = lap.get("average_torque") or stats.get("avg_torque_Nm")
             vi = round(np_w / avg_w, 3) if np_w and avg_w else None
             parsed.append({
+                "start_index": start,
+                "end_index": end,
                 "duration_s": dur,
                 "source": "device_lap",
+                "source_detail": _device_lap_source_detail(detail),
+                "label": lap.get("label") or lap.get("name"),
+                "interval_type": lap.get("type") or lap.get("lap_type") or lap.get("intensity"),
                 "is_work": _is_work_lap(lap),
                 "avg_power_W": float(avg_w) if avg_w else None,
                 "np_W": float(np_w) if np_w else None,
                 "vi": vi,
                 "avg_hr_bpm": avg_hr,
                 "avg_cadence_rpm": avg_cad,
+                "avg_torque_Nm": avg_torque,
+                "decoupling_pct": lap.get("decoupling"),
+                "training_load": lap.get("training_load"),
                 "target_power_W": target_power,
                 "power_compliance_pct": compute.power_compliance_pct(avg_w, target_power),
                 "within_rep_fade_pct": stats.get("within_rep_fade_pct"),
+                "peak_5s_W": stats.get("peak_5s_W"),
+                "peak_10s_W": stats.get("peak_10s_W"),
+                "peak_15s_W": stats.get("peak_15s_W"),
+                "peak_30s_W": stats.get("peak_30s_W"),
             })
             cursor = end
         return parsed
 
-    # ── ICU interval_summary strings ───────────────────────────────────────────
-    items = detail.get("interval_summary") or []
-    if not items or not isinstance(items[0], str):
-        return []
-
-    # Parse all entries first so we can check for terrain noise before slicing
-    entries: list[tuple[int, int]] = []  # (dur_s, stated_power_w)
-    for entry in items:
-        m = re.search(r'(\d+)x\s+((?:\d+m)?\s*(?:\d+s)?)\s+(\d+)w', entry)
-        if not m:
-            continue
-        count = int(m.group(1))
-        ds = m.group(2).strip()
-        pw = int(m.group(3))
-        dur_s = 0
-        mm = re.search(r'(\d+)m', ds)
-        ss = re.search(r'(\d+)s', ds)
-        if mm: dur_s += int(mm.group(1)) * 60
-        if ss: dur_s += int(ss.group(1))
-        for _ in range(count):
-            entries.append((dur_s, pw))
-
-    if not entries:
-        return []
-
-    # Discard if durations vary wildly — terrain segments, not structured reps
-    durations = [e[0] for e in entries]
-    if len(durations) >= 3:
-        max_dur = max(durations)
-        min_dur = max(min(durations), 1)
-        if max_dur / min_dur > 10:
-            return []
-
-    # interval_summary has no positional data. Keep the API-reported duration
-    # and average power, but do not fabricate HR/cadence/within-rep metrics by
-    # slicing a stream with guessed recovery gaps.
-    parsed = []
-    for dur_s, stated_pw in entries:
-        parsed.append({
-            "duration_s": dur_s,
-            "source": "icu_interval_summary",
-            "is_work": True,
-            "avg_power_W": float(stated_pw),
-            "np_W": None,
-            "vi": None,
-            "avg_hr_bpm": None,
-            "avg_cadence_rpm": None,
-            "target_power_W": target_power,
-            "power_compliance_pct": compute.power_compliance_pct(stated_pw, target_power),
-            "within_rep_fade_pct": None,
-        })
-
-    return parsed
+    # No device laps means no interval-level claims. In particular, do not parse
+    # interval_summary or accept unverified icu_intervals as a quiet fallback.
+    return []
 
 
 def enrich_session_summary(summary: dict, session_type: str) -> dict:

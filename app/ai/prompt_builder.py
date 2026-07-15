@@ -23,6 +23,7 @@ def build_system_prompt() -> str:
     persona = cfg["persona"]
     voice = cfg["voice"]
     tolerances = cfg["tolerances"]
+    interval_policy = cfg["interval_analysis"]
     session_types = cfg["session_types"]
     verdict = cfg["verdict"]
     context_mods = cfg["context_modifiers"]
@@ -88,6 +89,16 @@ def build_system_prompt() -> str:
     ]
     for metric, thresholds in tolerances.items():
         parts.append(_format_tolerance(metric, thresholds))
+
+    parts += [
+        "",
+        "## Interval Data Policy",
+        f"Accepted interval source: {interval_policy['source']} only.",
+        "Never use or infer Intervals.icu automatically detected intervals.",
+        "When interval_metrics_available is false, do not claim rep compliance, "
+        "rep fade, within-rep pacing, or phase execution. Missing device laps are "
+        "incomplete data, not a performance failure; judge only supported activity-level metrics.",
+    ]
 
     # ── Session type reference ────────────────────────────────────────────────
     parts += ["", "## Session Type Reference"]

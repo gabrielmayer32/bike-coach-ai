@@ -164,13 +164,14 @@ classification:
     - session_type: over_unders
       keywords: [over under, over-under]
     - session_type: torque
-      keywords: [torque, low cadence, force]
+      # Keep combined torque-sprint names ahead of the generic "sprint" rule.
+      keywords: [torque, torq sprint, torq-sprint, torq+sprint, low cadence, force]
     - session_type: threshold
       keywords: [threshold, sweet spot, sweetspot, lt2, ftp]
     - session_type: tempo
       keywords: [tempo, lt1, z3]
     - session_type: sprint_neuromuscular
-      keywords: [sprint, neuromuscular, torq+sprint]
+      keywords: [sprint, neuromuscular]
     - session_type: endurance_z2
       keywords: [aerobic endurance, endurance, zone 2, z2, base]
     - session_type: recovery
@@ -186,6 +187,16 @@ classification:
     - {session_type: threshold, below: 1.05}
     - {session_type: vo2max, below: 1.20}
   default_session_type: sprint_neuromuscular
+
+
+# Device-recorded laps are the source of truth for interval boundaries.
+# Intervals.icu may calculate metrics for those laps, but its automatic
+# interval detection must never silently replace them. If device laps are
+# missing, the ride still receives activity-level analysis without rep claims.
+interval_analysis:
+  source: device_laps
+  allow_intervals_icu_detected: false
+  on_missing_device_laps: activity_level_only
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

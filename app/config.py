@@ -133,6 +133,14 @@ class ClassificationConfig(BaseModel):
     default_session_type: str
 
 
+class IntervalAnalysisConfig(BaseModel):
+    """Coach-owned policy for selecting completed workout intervals."""
+
+    source: Literal["device_laps"] = "device_laps"
+    allow_intervals_icu_detected: Literal[False] = False
+    on_missing_device_laps: Literal["activity_level_only"] = "activity_level_only"
+
+
 class CoachingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -140,6 +148,7 @@ class CoachingConfig(BaseModel):
     persona: PersonaConfig
     voice: VoiceConfig
     zones: ZonesConfig
+    interval_analysis: IntervalAnalysisConfig
     tolerances: dict[str, dict[str, Any]]
     classification: ClassificationConfig
     session_types: dict[str, SessionTypeConfig]

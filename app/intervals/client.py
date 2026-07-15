@@ -6,7 +6,7 @@ Key findings from the spike:
 - Auth: HTTP Basic, username="API_KEY", password=<key>
 - Athlete roster: GET /athlete/0/athlete-summary.json  → fields are athlete_id / athlete_name
 - Activity list:  GET /athlete/{id}/activities
-- Activity detail: GET /athlete/{id}/activities/{act_id}  → returns list of 1
+- Activity detail: GET /activity/{act_id}?intervals=true
 - Streams:  GET /activity/{act_id}/streams  (no athlete prefix — different path)
 - Calendar: GET /athlete/{id}/events
 - Wellness:  GET /athlete/{id}/wellness/{date}
@@ -88,8 +88,11 @@ def list_activities(
 
 
 def get_activity_detail(athlete_id: str, activity_id: str) -> dict | None:
-    """Return full activity detail. The API returns a list of 1."""
-    data = _get(f"/athlete/{athlete_id}/activities/{activity_id}")
+    """Return full activity detail including positioned interval data."""
+    # The activity-detail endpoint is scoped by activity id. Keep athlete_id in
+    # the public interface because callers use it for every activity fetch.
+    del athlete_id
+    data = _get(f"/activity/{activity_id}", params={"intervals": "true"})
     if not data:
         return None
     return data[0] if isinstance(data, list) else data

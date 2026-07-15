@@ -55,6 +55,31 @@ def test_invalid_config_fails_validation():
         config.CoachingConfig.model_validate(raw)
 
 
+def test_config_enforces_device_laps_without_auto_detected_fallback():
+    policy = config.get_coaching_config()["interval_analysis"]
+    assert policy == {
+        "source": "device_laps",
+        "allow_intervals_icu_detected": False,
+        "on_missing_device_laps": "activity_level_only",
+    }
+
+
+def test_activity_detail_requests_positioned_intervals(monkeypatch):
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured.update(path=path, params=params)
+        return {"id": "i123", "icu_intervals": []}
+
+    monkeypatch.setattr(icu, "_get", fake_get)
+    result = icu.get_activity_detail("athlete", "i123")
+    assert result["id"] == "i123"
+    assert captured == {
+        "path": "/activity/i123",
+        "params": {"intervals": "true"},
+    }
+
+
 def test_configured_ftp_selects_matching_indoor_and_outdoor_values():
     profile = {
         "sportSettings": [{
@@ -155,6 +180,20 @@ def test_classifier_prefers_planned_workout_and_reaches_summary():
     assert summary["session_type"] == "vo2max"
 
 
+@pytest.mark.parametrize("name", [
+    "Girona - Torq sprint",
+    "Torq-sprint efforts",
+    "Torq+sprint session",
+])
+def test_torque_sprint_titles_match_torque_before_generic_sprint(name):
+    assert _classify_session({
+        "name": name,
+        "planned_workout": {},
+        "if_value": 1.1,
+        "avg_cadence_rpm": 80,
+    }) == "torque"
+
+
 def test_zone_boundaries_are_continuous_and_hr_zones_are_separate():
     zones = config.get_coaching_config()["zones"]["coggan_7"]
     power = compute.time_in_zones_from_stream([55.0, 55.1, 75.0, 75.1], 100, zones)
@@ -188,7 +227,7 @@ def test_recovery_short_power_spikes_with_low_hr_is_aerobically_easy():
     assert summary["recovery_aerobically_easy"] is True
 
 
-def test_unpositioned_icu_intervals_do_not_fabricate_stream_metrics():
+def test_interval_summary_is_not_used_as_device_lap_fallback():
     detail = {"interval_summary": ["3x 2m 300w"]}
     streams = {
         "watts": [100.0] * 1000,
@@ -196,10 +235,78 @@ def test_unpositioned_icu_intervals_do_not_fabricate_stream_metrics():
         "cadence": [90.0] * 1000,
     }
     intervals = _extract_interval_list(detail, streams, 300, 300)
-    assert len(intervals) == 3
-    assert intervals[0]["avg_power_W"] == 300
-    assert intervals[0]["avg_hr_bpm"] is None
-    assert intervals[0]["within_rep_fade_pct"] is None
+    assert intervals == []
+
+
+def test_unverified_icu_auto_detected_intervals_are_rejected():
+    detail = {
+        "use_laps_for_power_intervals": False,
+        "icu_intervals": [{
+            "type": "WORK",
+            "start_index": 0,
+            "end_index": 59,
+            "moving_time": 60,
+            "average_watts": 300,
+        }],
+    }
+    intervals = _extract_interval_list(detail, {"watts": [300.0] * 60}, 300, 300)
+    assert intervals == []
+
+
+def test_verified_lap_mode_uses_positioned_icu_intervals_and_stream_metrics():
+    detail = {
+        "use_laps_for_power_intervals": True,
+        "icu_intervals": [
+            {
+                "type": "WORK",
+                "start_index": 0,
+                "end_index": 59,
+                "moving_time": 60,
+                "average_watts": 300,
+                "weighted_average_watts": 301,
+                "average_heartrate": 165,
+                "average_cadence": 90,
+                "average_torque": 32,
+            },
+            {
+                "type": "RECOVERY",
+                "start_index": 60,
+                "end_index": 89,
+                "moving_time": 30,
+                "average_watts": 120,
+            },
+        ],
+    }
+    streams = {
+        "watts": [300.0] * 60 + [120.0] * 30,
+        "heartrate": [165.0] * 60 + [130.0] * 30,
+        "cadence": [90.0] * 60 + [80.0] * 30,
+        "torque": [32.0] * 60 + [15.0] * 30,
+    }
+    intervals = _extract_interval_list(detail, streams, 300, 300)
+    assert len(intervals) == 2
+    assert intervals[0]["source"] == "device_lap"
+    assert intervals[0]["source_detail"] == "icu_intervals_lap_mode"
+    assert intervals[0]["is_work"] is True
+    assert intervals[0]["peak_30s_W"] == 300
+    assert intervals[0]["avg_torque_Nm"] == 32
+    assert intervals[1]["is_work"] is False
+
+
+def test_missing_device_laps_preserves_activity_analysis_with_provenance(monkeypatch):
+    _mock_summary_apis(
+        monkeypatch,
+        _detail(icu_ftp=300, interval_summary=["3x 2m 300w"]),
+        {"sportSettings": [{"types": ["Ride"], "ftp": 300}]},
+    )
+    summary = build_session_summary("athlete", "activity", {})
+    assert summary["interval_source"] == "missing"
+    assert summary["interval_source_verified"] is False
+    assert summary["interval_metrics_available"] is False
+    assert summary["automatic_interval_detection_used"] is False
+    assert summary["incomplete_data_reason"] == "device_laps_not_available"
+    assert summary["interval_details"] == []
+    assert summary["avg_power_W"] == 200
 
 
 def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():
@@ -208,6 +315,8 @@ def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():
     assert "Target zone: Z4" in prompt
     assert "Pacing preference: even_to_slight_negative_split" in prompt
     assert "torque_cadence_deviation_rpm" in prompt
+    assert "Accepted interval source: device_laps only" in prompt
+    assert "Missing device laps are incomplete data, not a performance failure" in prompt
 
 
 def test_historical_settings_control_enablement_and_fields(monkeypatch):
