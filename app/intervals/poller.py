@@ -233,6 +233,7 @@ def _classify_session(summary: dict) -> str:
         if evidence:
             summary["session_type_source"] = "configured_interval_signature"
             summary["session_type_evidence"] = evidence
+            _apply_inferred_session_policy(summary, session_type, evidence)
             return session_type
 
     if_value = summary.get("if_value")
@@ -255,6 +256,44 @@ def _classify_session(summary: dict) -> str:
 def _text_has_keyword(text: str, keyword: str) -> bool:
     """Match a configured word or phrase without accidental substrings."""
     return bool(re.search(rf"(?<!\w){re.escape(keyword.lower())}(?!\w)", text))
+
+
+def _apply_inferred_session_policy(
+    summary: dict,
+    session_type: str,
+    evidence: dict,
+) -> None:
+    """Annotate observed matches without inventing planned phase roles."""
+    policy = get_coaching_config()["inferred_session_policy"]
+    matched_indices = set(evidence.get("interval_indices", []))
+    observed_label = policy["matched_interval_label_template"].format(
+        session_type=session_type
+    )
+    for index, interval in enumerate(summary.get("interval_details") or []):
+        interval["planned_role"] = interval.get("planned_role")
+        if index in matched_indices:
+            interval["observed_role"] = observed_label
+            interval["observed_role_source"] = "configured_interval_signature"
+        else:
+            interval["observed_role"] = policy["unmatched_interval_role"]
+            interval["observed_role_source"] = None
+
+    summary["analysis_constraints"] = {
+        "planned_roles_verified": bool(
+            summary.get("target_interval_membership_verified")
+        ),
+        "unmatched_interval_role": policy["unmatched_interval_role"],
+        "whole_activity_context_only_metrics": policy[
+            "whole_activity_context_only_metrics"
+        ],
+        "whole_activity_metrics_verdict_eligible": False,
+        "missing_plan_must_not_reduce_verdict": policy[
+            "missing_plan_must_not_reduce_verdict"
+        ],
+        "allow_well_for_supported_observed_execution": policy[
+            "allow_well_for_supported_observed_execution"
+        ],
+    }
 
 
 def _match_interval_signature(

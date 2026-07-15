@@ -112,6 +112,7 @@ def analyse_session(
             parsed = json.loads(raw_text)
             validated = AnalysisResult.model_validate(parsed)
             _validate_athlete_message(validated.athlete_message)
+            _validate_analysis_grounding(validated, session_summary)
             result = validated.model_dump()
             break
         except (json.JSONDecodeError, ValidationError, ValueError) as exc:
@@ -207,6 +208,87 @@ def _validate_athlete_message(message: str) -> None:
             errors.append(f"athlete_message contains forbidden explanation: {phrase}")
     if errors:
         raise ValueError("; ".join(errors))
+
+
+def _validate_analysis_grounding(
+    result: AnalysisResult,
+    session_summary: dict,
+) -> None:
+    """Reject invented phase roles and unsupported verdict penalties."""
+    if session_summary.get("session_type_source") != "configured_interval_signature":
+        return
+    if session_summary.get("target_interval_membership_verified"):
+        return
+
+    policy = get_coaching_config()["inferred_session_policy"]
+    text = " ".join([
+        *result.key_observations,
+        result.reasoning,
+        result.athlete_message,
+    ])
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    errors: list[str] = []
+
+    for label in policy["forbidden_unverified_phase_labels"]:
+        phase_pattern = re.compile(
+            rf"\b{re.escape(label.lower())}(?:/[\w-]+)?(?:\s+\w+){{0,2}}\s+"
+            rf"(?:lap|interval|phase|section)s?\b"
+        )
+        if phase_pattern.search(text.lower()):
+            errors.append(
+                f"unverified interval phase label is forbidden: {label}"
+            )
+
+    negation_qualifiers = (
+        "cannot be confirmed",
+        "not confirmed",
+        "not verified",
+        "unverified",
+        "unknown",
+        "not linked",
+    )
+    for sentence in sentences:
+        lowered = sentence.lower()
+        for term in policy["unqualified_work_terms"]:
+            if term.lower() in lowered and not any(
+                qualifier in lowered for qualifier in negation_qualifiers
+            ):
+                errors.append(f"unqualified planned-role term is forbidden: {term}")
+
+        verdict_causal = (
+            ("verdict" in lowered or "okay rather than well" in lowered)
+            and any(word in lowered for word in ("because", "reason", "rather than"))
+        )
+        if verdict_causal and any(
+            phrase in lowered
+            for phrase in (
+                "plan is not linked",
+                "planned workout is not linked",
+                "target membership is unverified",
+                "target membership is not verified",
+            )
+        ):
+            errors.append("missing planned-workout context must not reduce the verdict")
+
+        metric_mentioned = any(
+            (
+                metric == "vi" and re.search(r"\bvi\b|variability index", lowered)
+            )
+            or (metric == "decoupling_pct" and "decoupling" in lowered)
+            or (metric == "time_in_target_zone_pct" and "time in" in lowered and "zone" in lowered)
+            for metric in policy["whole_activity_context_only_metrics"]
+        )
+        contextualised = any(
+            phrase in lowered
+            for phrase in ("context only", "does not affect", "not used", "must not lower")
+        )
+        if verdict_causal and metric_mentioned and not contextualised:
+            errors.append(
+                "whole-activity context-only metrics must not reduce the verdict"
+            )
+
+    if errors:
+        raise ValueError("; ".join(dict.fromkeys(errors)))
 
 
 def _validation_messages(exc: Exception) -> list[str]:

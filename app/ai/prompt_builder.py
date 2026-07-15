@@ -24,6 +24,7 @@ def build_system_prompt() -> str:
     voice = cfg["voice"]
     tolerances = cfg["tolerances"]
     interval_policy = cfg["interval_analysis"]
+    inferred_policy = cfg["inferred_session_policy"]
     session_types = cfg["session_types"]
     verdict = cfg["verdict"]
     context_mods = cfg["context_modifiers"]
@@ -111,6 +112,17 @@ def build_system_prompt() -> str:
         "matched the coach-owned recognition signature. Discuss the observed pattern, but "
         "do not call it the prescription or judge planned-step compliance without verified "
         "target membership.",
+        "For an inferred structured session, use observed_role exactly as supplied. Never "
+        "rename unmatched boundaries as warm-up, recovery, transition, cooldown, work, or "
+        "any other planned phase when planned_role is null.",
+        "The following whole-activity metrics are context only for an inferred structured "
+        "session and must not lower its verdict: "
+        + ", ".join(inferred_policy["whole_activity_context_only_metrics"])
+        + ". Judge supported execution from the signature-matched intervals instead.",
+        "A missing or unlinked plan is missing context, not an athlete performance error, "
+        "and must not reduce the verdict. A well verdict is allowed when supported observed "
+        "execution is strong, while prescription compliance remains explicitly unknown.",
+        "Required framing example: " + inferred_policy["wording_example"].strip(),
     ]
 
     # ── Session type reference ────────────────────────────────────────────────

@@ -199,6 +199,7 @@ def build_session_summary(
         for interval, interval_target in zip(work_intervals, step_targets):
             interval["is_target_work"] = True
             interval["target_membership_source"] = "planned_step_count"
+            interval["planned_role"] = "work"
             interval["target_power_W"] = interval_target
             interval["power_compliance_pct"] = compute.power_compliance_pct(
                 interval.get("avg_power_W"), interval_target
@@ -579,6 +580,9 @@ def _extract_interval_list(
                 # deliberately separate from membership in the prescribed set.
                 "is_target_work": None,
                 "target_membership_source": "unverified",
+                "observed_role": "unknown",
+                "observed_role_source": None,
+                "planned_role": None,
                 "avg_power_W": float(avg_w) if avg_w else None,
                 "np_W": float(np_w) if np_w else None,
                 "vi": vi,

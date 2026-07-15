@@ -158,6 +158,17 @@ class IntervalAnalysisConfig(BaseModel):
     ignore_recovery_fragments_shorter_than_s: float = Field(default=5, ge=0)
 
 
+class InferredSessionPolicyConfig(BaseModel):
+    matched_interval_label_template: str
+    unmatched_interval_role: Literal["unknown"] = "unknown"
+    forbidden_unverified_phase_labels: list[str] = Field(min_length=1)
+    unqualified_work_terms: list[str] = Field(min_length=1)
+    whole_activity_context_only_metrics: list[str] = Field(min_length=1)
+    missing_plan_must_not_reduce_verdict: Literal[True] = True
+    allow_well_for_supported_observed_execution: Literal[True] = True
+    wording_example: str
+
+
 class CoachingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -166,6 +177,7 @@ class CoachingConfig(BaseModel):
     voice: VoiceConfig
     zones: ZonesConfig
     interval_analysis: IntervalAnalysisConfig
+    inferred_session_policy: InferredSessionPolicyConfig
     tolerances: dict[str, dict[str, Any]]
     classification: ClassificationConfig
     session_types: dict[str, SessionTypeConfig]

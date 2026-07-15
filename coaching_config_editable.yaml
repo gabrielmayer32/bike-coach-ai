@@ -173,6 +173,22 @@ interval_analysis:
   # Ignore tiny residual fragments Intervals may append around device lap boundaries.
   ignore_recovery_fragments_shorter_than_s: 5
 
+# How to discuss a session inferred from completed data when its calendar workout
+# is not linked. These rules protect trust: missing context is never athlete fault.
+inferred_session_policy:
+  matched_interval_label_template: "{session_type}_signature_match"
+  unmatched_interval_role: unknown
+  forbidden_unverified_phase_labels: [warm-up, warmup, recovery, transition, cool-down, cooldown]
+  unqualified_work_terms: [work interval, work intervals, work effort, work efforts, work rep, work reps]
+  whole_activity_context_only_metrics: [vi, decoupling_pct, time_in_target_zone_pct]
+  missing_plan_must_not_reduce_verdict: true
+  allow_well_for_supported_observed_execution: true
+  wording_example: >
+    Two observed intervals match the configured tempo signature and show steady execution.
+    Because the planned workout is not linked, they cannot be confirmed as prescribed work
+    intervals. The remaining lap roles are unknown, and whole-activity VI and decoupling are
+    not suitable measures of pacing across this mixed-intensity structure.
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 4. METRIC THRESHOLDS
@@ -482,18 +498,19 @@ session_types:
 verdict:
   well:
     description: >
-      Session executed as prescribed. Strong compliance with target power/zone.
-      Good pacing across reps. Physiological response matched the intent of the session.
+      Strong execution on the evidence that is genuinely supported. When prescription
+      membership is verified, this can mean strong target compliance. When the plan is
+      unlinked, a well verdict is still allowed for strong observed signature execution,
+      while prescription compliance remains explicitly unknown.
   okay:
     description: >
-      Mostly on target. Minor deviations that did not fundamentally undermine the
-      training intent. One rep fell short, some drift outside zone, slight fade — but
-      the core stimulus was still delivered.
+      Supported execution was mostly sound with minor meaningful deviations. Use okay
+      for observed limitations, not merely because planned-workout context is missing.
   poor:
     description: >
-      Key metrics missed by a meaningful margin, OR the session intent was undermined
-      (e.g. a Z2 ride that became tempo, a threshold set that fell apart rep by rep).
-      Needs a coaching note — constructive, not punitive.
+      Supported evidence shows that the observed or verified session intent was undermined
+      by a meaningful margin. Missing or unverified data can never create a poor verdict.
+      The coaching note remains constructive and treats the result as learning, not failure.
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

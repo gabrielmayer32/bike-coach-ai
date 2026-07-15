@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.ai import analyser
-from app.ai.analyser import _validate_athlete_message
+from app.ai.analyser import (
+    AnalysisResult,
+    _validate_analysis_grounding,
+    _validate_athlete_message,
+)
 from app.ai.prompt_builder import build_system_prompt
 from app.db import crud
 from app.db.models import Activity, Analysis, Athlete, Base
@@ -85,6 +89,11 @@ def test_every_session_type_owns_a_recognition_signature():
         session["recognition"].get("mode")
         for session in cfg["session_types"].values()
     )
+    policy = cfg["inferred_session_policy"]
+    assert policy["missing_plan_must_not_reduce_verdict"] is True
+    assert policy["allow_well_for_supported_observed_execution"] is True
+    assert "well verdict is still allowed" in cfg["verdict"]["well"]["description"]
+    assert "Missing or unverified data can never" in cfg["verdict"]["poor"]["description"]
 
 
 def test_activity_detail_requests_positioned_intervals(monkeypatch):
@@ -517,6 +526,10 @@ def test_two_comparable_30m_tempo_intervals_override_whole_ride_if():
         "duration_spread_pct": 6.3,
         "power_spread_pct": 4.0,
     }
+    assert summary["interval_details"][1]["observed_role"] == "tempo_signature_match"
+    assert summary["interval_details"][3]["observed_role"] == "tempo_signature_match"
+    assert summary["interval_details"][0]["observed_role"] == "unknown"
+    assert summary["analysis_constraints"]["whole_activity_metrics_verdict_eligible"] is False
 
 
 def test_non_comparable_long_efforts_do_not_infer_tempo_pattern():
@@ -775,6 +788,8 @@ def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():
     assert "target_interval_membership_verified is false" in prompt
     assert "session_type_source=configured_interval_signature" in prompt
     assert "Recognition signature:" in prompt
+    assert "missing or unlinked plan is missing context" in prompt
+    assert "Two observed intervals match the configured tempo signature" in prompt
 
 
 def test_historical_settings_control_enablement_and_fields(monkeypatch):
@@ -822,6 +837,59 @@ def test_athlete_message_validation_enforces_style():
         _validate_athlete_message("Nice one today. Power was controlled — well done. Keep it up.")
     with pytest.raises(ValueError, match="exactly 3 sentences"):
         _validate_athlete_message("Nice one today. Keep it up.")
+
+
+def _analysis_result(reasoning: str, observations: list[str]) -> AnalysisResult:
+    return AnalysisResult.model_validate({
+        "verdict": "okay",
+        "key_observations": observations,
+        "reasoning": reasoning,
+        "escalate_to_coach": {"flag": False, "reason": ""},
+        "athlete_message": "Nice one today. The observed tempo efforts were steady. Keep building.",
+    })
+
+
+def test_grounding_rejects_invented_roles_and_context_metric_penalties():
+    result = _analysis_result(
+        (
+            "The warm-up lap, recovery lap and cool-down final lap created mixed structure. "
+            "The work efforts were clean. Verdict is okay rather than well because target "
+            "membership is unverified and whole-activity VI is high."
+        ),
+        [
+            "Two tempo intervals were observed.",
+            "Whole-activity decoupling is elevated.",
+        ],
+    )
+    with pytest.raises(ValueError) as exc:
+        _validate_analysis_grounding(result, {
+            "session_type_source": "configured_interval_signature",
+            "target_interval_membership_verified": False,
+        })
+    message = str(exc.value)
+    assert "unverified interval phase label" in message
+    assert "unqualified planned-role term" in message
+    assert "must not reduce the verdict" in message
+
+
+def test_grounding_accepts_required_inferred_session_wording():
+    result = _analysis_result(
+        (
+            "Two observed intervals match the configured tempo signature and show steady "
+            "execution. Because the planned workout is not linked, they cannot be confirmed "
+            "as prescribed work intervals. The remaining lap roles are unknown, and "
+            "whole-activity VI and decoupling are context only across this mixed-intensity "
+            "structure."
+        ),
+        [
+            "The two observed tempo signature matches were steady.",
+            "The remaining interval roles are unknown.",
+        ],
+    )
+    _validate_analysis_grounding(result, {
+        "session_type_source": "configured_interval_signature",
+        "target_interval_membership_verified": False,
+    })
 
 
 def test_analysis_retries_once_after_output_validation_failure(monkeypatch):
