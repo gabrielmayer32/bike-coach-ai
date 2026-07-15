@@ -300,6 +300,7 @@ def test_interval_summary_is_not_used_as_device_lap_fallback():
 
 def test_unverified_icu_auto_detected_intervals_are_rejected():
     detail = {
+        "icu_lap_count": 4,
         "use_laps_for_power_intervals": False,
         "icu_intervals": [{
             "type": "WORK",
@@ -311,6 +312,50 @@ def test_unverified_icu_auto_detected_intervals_are_rejected():
     }
     intervals = _extract_interval_list(detail, {"watts": [300.0] * 60}, 300, 300)
     assert intervals == []
+
+
+def test_reported_lap_count_recognizes_lap_intervals_without_legacy_flag():
+    detail = {
+        "icu_lap_count": 4,
+        "icu_intervals": [
+            {
+                "type": "WORK",
+                "start_index": 0,
+                "end_index": 119,
+                "moving_time": 120,
+                "average_watts": 280,
+                "average_cadence": 60,
+            },
+            {
+                "type": "RECOVERY",
+                "start_index": 120,
+                "end_index": 179,
+                "moving_time": 60,
+                "average_watts": 120,
+                "average_cadence": 80,
+            },
+        ],
+    }
+    streams = {
+        "watts": [280.0] * 120 + [120.0] * 60,
+        "cadence": [60.0] * 120 + [80.0] * 60,
+    }
+    intervals = _extract_interval_list(detail, streams, 300, None)
+    assert len(intervals) == 2
+    assert intervals[0]["source"] == "device_lap"
+    assert intervals[0]["source_detail"] == "icu_intervals_lap_count"
+
+
+def test_more_detected_intervals_than_reported_laps_are_rejected():
+    interval = {
+        "type": "WORK",
+        "start_index": 0,
+        "end_index": 59,
+        "moving_time": 60,
+        "average_watts": 300,
+    }
+    detail = {"icu_lap_count": 2, "icu_intervals": [interval] * 3}
+    assert _extract_interval_list(detail, {"watts": [300.0] * 60}, 300, None) == []
 
 
 def test_verified_lap_mode_uses_positioned_icu_intervals_and_stream_metrics():
@@ -353,6 +398,31 @@ def test_verified_lap_mode_uses_positioned_icu_intervals_and_stream_metrics():
     assert intervals[1]["is_work"] is False
 
 
+def test_low_cadence_device_work_laps_classify_torque_over_if_fallback():
+    summary = {
+        "name": "Aigle Road Cycling",
+        "planned_workout": {},
+        "if_value": 0.755,
+        "avg_cadence_rpm": 86,
+        "interval_source": "device_laps",
+        "interval_details": [
+            {
+                "is_work": True,
+                "duration_s": 249,
+                "avg_power_W": 272,
+                "avg_cadence_rpm": 64.9,
+            },
+            {
+                "is_work": True,
+                "duration_s": 131,
+                "avg_power_W": 262,
+                "avg_cadence_rpm": 55.3,
+            },
+        ],
+    }
+    assert _classify_session(summary) == "torque"
+
+
 def test_missing_device_laps_preserves_activity_analysis_with_provenance(monkeypatch):
     _mock_summary_apis(
         monkeypatch,
@@ -367,6 +437,31 @@ def test_missing_device_laps_preserves_activity_analysis_with_provenance(monkeyp
     assert summary["incomplete_data_reason"] == "device_laps_not_available"
     assert summary["interval_details"] == []
     assert summary["avg_power_W"] == 200
+
+
+def test_summary_exposes_reported_device_lap_count(monkeypatch):
+    _mock_summary_apis(
+        monkeypatch,
+        _detail(
+            icu_ftp=300,
+            icu_lap_count=4,
+            icu_intervals=[{
+                "type": "WORK",
+                "start_index": 0,
+                "end_index": 119,
+                "moving_time": 120,
+                "average_watts": 280,
+                "average_cadence": 60,
+            }],
+        ),
+        {"sportSettings": [{"types": ["Ride"], "ftp": 300}]},
+    )
+    summary = build_session_summary("athlete", "activity", {})
+    assert summary["summary_version"] == 4
+    assert summary["device_lap_count"] == 4
+    assert summary["interval_source"] == "device_laps"
+    assert summary["interval_source_detail"] == "icu_intervals_lap_count"
+    assert summary["interval_source_verified"] is True
 
 
 def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():

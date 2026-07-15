@@ -180,6 +180,10 @@ classification:
   low_cadence_min_rpm: 40
   low_cadence_max_rpm: 65
   low_cadence_min_if: 0.7
+  # Whole-ride cadence hides torque work. Two or more device-recorded work laps
+  # of at least this duration inside the cadence range classify the session as torque.
+  low_cadence_interval_min_reps: 2
+  low_cadence_interval_min_duration_s: 60
   if_fallback:
     - {session_type: recovery, below: 0.55}
     - {session_type: endurance_z2, below: 0.76}

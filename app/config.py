@@ -129,6 +129,8 @@ class ClassificationConfig(BaseModel):
     low_cadence_min_rpm: float = 40
     low_cadence_max_rpm: float = 65
     low_cadence_min_if: float = 0.7
+    low_cadence_interval_min_reps: int = Field(default=2, ge=1)
+    low_cadence_interval_min_duration_s: float = Field(default=60, ge=0)
     if_fallback: list[ClassificationIfRule]
     default_session_type: str
 

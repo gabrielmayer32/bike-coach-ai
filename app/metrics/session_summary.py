@@ -32,8 +32,13 @@ class SessionSummary(BaseModel):
     interval_source_policy: Literal["device_laps"] = "device_laps"
     interval_source: Literal["device_laps", "missing"] = "missing"
     interval_source_detail: Optional[
-        Literal["activity_laps", "icu_intervals_lap_mode"]
+        Literal[
+            "activity_laps",
+            "icu_intervals_lap_mode",
+            "icu_intervals_lap_count",
+        ]
     ] = None
+    device_lap_count: int = 0
     interval_source_verified: bool = False
     interval_metrics_available: bool = False
     automatic_interval_detection_used: Literal[False] = False
@@ -231,7 +236,7 @@ def build_session_summary(
 
     # ── Assemble summary ──────────────────────────────────────────────────────
     summary: dict[str, Any] = {
-        "summary_version": 3,
+        "summary_version": 4,
         # Identity
         "activity_id": activity_id,
         "athlete_id": athlete_id,
@@ -262,6 +267,7 @@ def build_session_summary(
         "interval_source": interval_source,
         "interval_source_policy": cfg["interval_analysis"]["source"],
         "interval_source_detail": interval_source_detail,
+        "device_lap_count": _reported_device_lap_count(detail),
         "interval_source_verified": interval_source == "device_laps",
         "interval_metrics_available": bool(interval_list),
         "automatic_interval_detection_used": cfg["interval_analysis"][
@@ -331,6 +337,45 @@ def _activity_uses_device_laps(detail: dict) -> bool:
     return source in {"device_laps", "laps", "fit_laps", "activity_laps"}
 
 
+def _reported_device_lap_count(detail: dict) -> int:
+    """Return the source activity's lap count reported by Intervals.icu."""
+    try:
+        return max(0, int(detail.get("icu_lap_count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _icu_intervals_correlate_with_device_laps(detail: dict) -> bool:
+    """Recognise lap-derived intervals when the API omits its legacy lap-mode flag.
+
+    Recent Intervals.icu activity payloads report ``icu_lap_count`` but do not
+    always include ``use_laps_for_*``. In lap mode Intervals may omit recovery or
+    otherwise non-meaningful laps, so the analysed interval count can be smaller
+    than the source lap count. An explicit non-lap flag or auto-detected source
+    always wins and keeps the intervals rejected.
+    """
+    for key in (
+        "use_laps_for_power_intervals",
+        "use_laps_for_intervals",
+        "use_laps",
+    ):
+        if detail.get(key) is False:
+            return False
+
+    source = str(detail.get("interval_source") or "").strip().lower()
+    if source in {"auto", "automatic", "detected", "icu_detected", "power"}:
+        return False
+
+    lap_count = _reported_device_lap_count(detail)
+    intervals = detail.get("icu_intervals")
+    return (
+        lap_count > 1
+        and isinstance(intervals, list)
+        and 0 < len(intervals) <= lap_count
+        and isinstance(intervals[0], dict)
+    )
+
+
 def _has_meaningful_device_laps(laps: Any) -> bool:
     """Ignore the single generic session lap present in many activity files."""
     if not isinstance(laps, list) or not laps or not isinstance(laps[0], dict):
@@ -362,6 +407,8 @@ def _device_lap_source_detail(detail: dict) -> str | None:
         and isinstance(intervals[0], dict)
     ):
         return "icu_intervals_lap_mode"
+    if _icu_intervals_correlate_with_device_laps(detail):
+        return "icu_intervals_lap_count"
     return None
 
 
@@ -369,7 +416,7 @@ def _device_lap_payload(detail: dict) -> list[dict]:
     source = _device_lap_source_detail(detail)
     if source == "activity_laps":
         return detail["laps"]
-    if source == "icu_intervals_lap_mode":
+    if source in {"icu_intervals_lap_mode", "icu_intervals_lap_count"}:
         return detail["icu_intervals"]
     return []
 

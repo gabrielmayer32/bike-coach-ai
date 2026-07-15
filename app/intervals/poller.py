@@ -206,6 +206,23 @@ def _classify_session(summary: dict) -> str:
         if any(keyword.lower() in text for keyword in rule["keywords"]):
             return rule["session_type"]
 
+    # Whole-ride cadence is normally much higher than cadence during torque
+    # reps. Prefer the accepted device-lap work intervals when they are present.
+    low_cadence_work_reps = 0
+    if summary.get("interval_source") == "device_laps":
+        for interval in summary.get("interval_details") or []:
+            cadence = interval.get("avg_cadence_rpm")
+            duration = interval.get("duration_s") or 0
+            if (
+                interval.get("is_work", True)
+                and cadence is not None
+                and cfg["low_cadence_min_rpm"] <= cadence <= cfg["low_cadence_max_rpm"]
+                and duration >= cfg["low_cadence_interval_min_duration_s"]
+            ):
+                low_cadence_work_reps += 1
+    if low_cadence_work_reps >= cfg["low_cadence_interval_min_reps"]:
+        return cfg["low_cadence_session_type"]
+
     # Low cadence sustained → torque session
     if (
         avg_cad
