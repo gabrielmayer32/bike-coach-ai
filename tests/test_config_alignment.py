@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import json
+from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -78,6 +80,64 @@ def test_activity_detail_requests_positioned_intervals(monkeypatch):
         "path": "/activity/i123",
         "params": {"intervals": "true"},
     }
+
+
+def test_athlete_profile_uses_current_settings_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_get(path, params=None):
+        captured.update(path=path, params=params)
+        return {"sportSettings": [{"types": ["Ride"], "ftp": 310}]}
+
+    monkeypatch.setattr(icu, "_get", fake_get)
+    profile = icu.get_athlete_profile("i123")
+    assert profile["sportSettings"][0]["ftp"] == 310
+    assert captured == {"path": "/athlete/i123", "params": None}
+
+
+def test_current_ride_ftp_uses_profile_setting_not_eftp(monkeypatch):
+    monkeypatch.setattr(
+        icu,
+        "get_athlete_profile",
+        lambda *_: {
+            "sportSettings": [{
+                "types": ["Ride", "VirtualRide"],
+                "ftp": 240,
+                "indoor_ftp": 230,
+                "eftp": 275,
+            }]
+        },
+    )
+    assert icu.get_current_ride_ftp("i123") == 240
+    assert icu.get_current_ride_ftp("i123", is_indoor=True) == 230
+
+
+def test_power_curve_data_does_not_relabel_modeled_ftp_as_profile_ftp(monkeypatch):
+    monkeypatch.setattr(
+        icu,
+        "_get",
+        lambda *_args, **_kwargs: {
+            "list": [{
+                "secs": [5, 60],
+                "watts": [900, 400],
+                "watts_per_kg": [12, 5.3],
+                "powerModels": [{"ftp": 275}],
+            }]
+        },
+    )
+    curve = icu.get_power_curve_range("i123", since=date(2026, 1, 1))
+    assert curve == {
+        "secs": [5, 60],
+        "watts": [900, 400],
+        "w_per_kg": [12, 5.3],
+    }
+
+
+def test_athlete_template_displays_live_profile_ftp_not_cached_activity_ftp():
+    template = Path("app/templates/athlete.html").read_text()
+    assert "{{ profile_ftp_W|int }}W" in template
+    assert "FTP · Intervals profile" in template
+    assert "{{ athlete.ftp_W|int }}W" not in template
 
 
 def test_configured_ftp_selects_matching_indoor_and_outdoor_values():

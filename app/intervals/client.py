@@ -211,7 +211,8 @@ def get_wellness_range(athlete_id: str, since: date, until: date | None = None) 
 def get_power_curve_range(athlete_id: str, since: date, until: date | None = None) -> dict:
     """
     Return the best-effort power curve for a date range.
-    Returns {secs: [...], watts: [...], w_per_kg: [...], ftp: int|None}.
+    FTP is deliberately excluded: power model FTP is estimated, while every
+    displayed/configured FTP must come from athlete sport settings.
     """
     until = until or date.today()
     data = _get(
@@ -223,31 +224,27 @@ def get_power_curve_range(athlete_id: str, since: date, until: date | None = Non
         },
     )
     if not data or not data.get("list"):
-        return {"secs": [], "watts": [], "w_per_kg": [], "ftp": None}
+        return {"secs": [], "watts": [], "w_per_kg": []}
 
     curve = data["list"][0]
-    ftp = None
-    for model in (curve.get("powerModels") or []):
-        if model.get("ftp"):
-            ftp = model["ftp"]
-            break
-
     return {
         "secs": curve.get("secs", []),
         "watts": curve.get("watts", []),
         "w_per_kg": curve.get("watts_per_kg", []),
-        "ftp": ftp,
     }
 
 
 # ── Athlete profile / power curve ─────────────────────────────────────────────
 
 def get_athlete_profile(athlete_id: str) -> dict | None:
-    """Return the athlete's own profile (FTP, max HR, weight, zones)."""
-    data = _get(f"/athlete/{athlete_id}/profile")
-    if not data:
-        return None
-    return data.get("athlete", data)
+    """Return the athlete with current per-sport settings and configured FTP."""
+    return _get(f"/athlete/{athlete_id}")
+
+
+def get_current_ride_ftp(athlete_id: str, is_indoor: bool = False) -> float | None:
+    """Return current configured Ride FTP from the athlete's Intervals profile."""
+    profile = get_athlete_profile(athlete_id)
+    return configured_ftp_for_activity(profile, "Ride", is_indoor)
 
 
 def configured_ftp_for_activity(

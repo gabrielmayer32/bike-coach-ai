@@ -109,6 +109,7 @@ def athlete_activities(request: Request, athlete_id: str, days: int = 30):
             raise HTTPException(404, "Athlete not found")
 
         athletes = crud.list_active_athletes(db)
+        profile_ftp_W = icu.get_current_ride_ftp(athlete_id)
 
         since = date.today() - timedelta(days=days)
         raw_activities = icu.list_activities(athlete_id, since=since)
@@ -167,6 +168,7 @@ def athlete_activities(request: Request, athlete_id: str, days: int = 30):
         return templates.TemplateResponse("athlete.html", {
             "request": request,
             "athlete": athlete,
+            "profile_ftp_W": profile_ftp_W,
             "athletes": athletes,
             "activity_rows": activity_rows,
             "days": days,
@@ -291,6 +293,8 @@ def athlete_fitness(athlete_id: str, days: int = 90):
 def athlete_power_curve(athlete_id: str, days: int = 90):
     since = date.today() - timedelta(days=days)
     data = icu.get_power_curve_range(athlete_id, since=since)
+    data["ftp"] = icu.get_current_ride_ftp(athlete_id)
+    data["ftp_source"] = "athlete_profile"
     return JSONResponse(data)
 
 
