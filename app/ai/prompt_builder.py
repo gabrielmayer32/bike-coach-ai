@@ -95,9 +95,22 @@ def build_system_prompt() -> str:
         "## Interval Data Policy",
         f"Accepted interval source: {interval_policy['source']} only.",
         "Never use or infer Intervals.icu automatically detected intervals.",
+        "device_laps_inferred means device lap records exist and the returned boundaries "
+        "correlate after residual filtering, but the API did not explicitly certify the source.",
         "When interval_metrics_available is false, do not claim rep compliance, "
         "rep fade, within-rep pacing, or phase execution. Missing device laps are "
         "incomplete data, not a performance failure; judge only supported activity-level metrics.",
+        "A generic interval is_work or interval_type=WORK label does not prove that the "
+        "interval belongs to the planned session. Only intervals with is_target_work=true "
+        "may be used for rep compliance, rep fade, target cadence, or athlete criticism.",
+        "When target_interval_membership_verified is false, describe interval boundaries "
+        "as context only and never call an unmatched effort a failed prescribed rep.",
+        "session_type may be inferred from physiology or an IF fallback. It is not proof "
+        "of the prescribed workout unless the planned workout data explicitly supports it.",
+        "session_type_source=configured_interval_signature means the completed activity "
+        "matched the coach-owned recognition signature. Discuss the observed pattern, but "
+        "do not call it the prescription or judge planned-step compliance without verified "
+        "target membership.",
     ]
 
     # ── Session type reference ────────────────────────────────────────────────
@@ -113,6 +126,7 @@ def build_system_prompt() -> str:
             parts.append("Key metrics: " + ", ".join(st["key_metrics"]))
         if st.get("pacing_preference"):
             parts.append(f"Pacing preference: {st['pacing_preference']}")
+        parts.append("Recognition signature: " + json.dumps(st["recognition"]))
         parts.append(f"Well executed: {st['well_executed'].strip()}")
         if st.get("red_flags"):
             parts.append("Red flags: " + "; ".join(st["red_flags"]))

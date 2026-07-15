@@ -157,40 +157,9 @@ zones:
       hr_pct_lthr: [999, 999]
 
 classification:
-  # Planned workout text is checked before the completed activity name.
-  keyword_priority:
-    - session_type: vo2max
-      keywords: [sit, vo2, short intense]
-    - session_type: over_unders
-      keywords: [over under, over-under]
-    - session_type: torque
-      # Keep combined torque-sprint names ahead of the generic "sprint" rule.
-      keywords: [torque, torq sprint, torq-sprint, torq+sprint, low cadence, force]
-    - session_type: threshold
-      keywords: [threshold, sweet spot, sweetspot, lt2, ftp]
-    - session_type: tempo
-      keywords: [tempo, lt1, z3]
-    - session_type: sprint_neuromuscular
-      keywords: [sprint, neuromuscular]
-    - session_type: endurance_z2
-      keywords: [aerobic endurance, endurance, zone 2, z2, base]
-    - session_type: recovery
-      keywords: [recovery, easy, high cadence, z1]
-  low_cadence_session_type: torque
-  low_cadence_min_rpm: 40
-  low_cadence_max_rpm: 65
-  low_cadence_min_if: 0.7
-  # Whole-ride cadence hides torque work. Two or more device-recorded work laps
-  # of at least this duration inside the cadence range classify the session as torque.
-  low_cadence_interval_min_reps: 2
-  low_cadence_interval_min_duration_s: 60
-  if_fallback:
-    - {session_type: recovery, below: 0.55}
-    - {session_type: endurance_z2, below: 0.76}
-    - {session_type: tempo, below: 0.88}
-    - {session_type: threshold, below: 1.05}
-    - {session_type: vo2max, below: 1.20}
-  default_session_type: sprint_neuromuscular
+  # Recognition rules live with each session type below. This is used only when
+  # no planned workout, title, interval signature, or IF range matches.
+  default_session_type: unclassified
 
 
 # Device-recorded laps are the source of truth for interval boundaries.
@@ -201,6 +170,8 @@ interval_analysis:
   source: device_laps
   allow_intervals_icu_detected: false
   on_missing_device_laps: activity_level_only
+  # Ignore tiny residual fragments Intervals may append around device lap boundaries.
+  ignore_recovery_fragments_shorter_than_s: 5
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -282,9 +253,24 @@ tolerances:
 # 5. SESSION TYPES
 #    Each session type has a purpose, what "well executed" looks like,
 #    and red flags the AI should always catch.
-#    When adding a session type, also add its rules under classification above.
+#    Each type also owns the editable rules used to recognise it.
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 session_types:
+
+  unclassified:
+    label: "Unclassified Ride"
+    target_zone: null
+    key_metrics: [avg_power_W, np_W, if_value, hr_zone_times_s, power_zone_times_s, rpe]
+    purpose: >
+      Preserve an honest activity-level analysis when the available evidence cannot
+      identify the intended session.
+    well_executed: >
+      Do not judge prescription compliance. Describe supported activity-level facts
+      and ask the coach to confirm the intended session when that matters.
+    red_flags: []
+    recognition:
+      mode: unclassified
+      priority: 999
 
   recovery:
     label: "Recovery / Easy Spin"
@@ -303,6 +289,11 @@ session_types:
       - "NP meaningfully higher than avg power (indicates repeated or prolonged surging, not isolated efforts)"
       - "Athlete reports feeling worse after than before"
       - "IMPORTANT: Power zone time totals on recovery rides are misleading — scattered short pushes (5-15s) accumulate into significant zone totals without any sustained physiological stress. Always cross-reference with HR zone times AND peak_30s_W. If HR stayed low and peak 30s power is below FTP, the athlete never held a sustained effort above Z2 — the ride was aerobically easy regardless of what the power zone breakdown shows."
+    recognition:
+      mode: continuous
+      priority: 80
+      keywords: [recovery, easy, high cadence, z1]
+      whole_activity_if: [0.0, 0.55]
 
   endurance_z2:
     label: "Endurance / Zone 2 Base"
@@ -322,6 +313,11 @@ session_types:
       - "Decoupling >8–10%"
       - "RPE much higher than the zone suggests"
       - "NP materially higher than avg power (surging)"
+    recognition:
+      mode: continuous
+      priority: 70
+      keywords: [aerobic endurance, endurance, zone 2, z2, base]
+      whole_activity_if: [0.55, 0.76]
 
   tempo:
     label: "Tempo / LT1"
@@ -340,6 +336,16 @@ session_types:
       - "High NP relative to avg during efforts (indicates lactate accumulation)"
       - "Cadence below 70rpm sustained during effort"
       - "RPE above 8 — drifting into threshold territory"
+    recognition:
+      mode: intervals
+      priority: 60
+      keywords: [tempo, lt1, z3]
+      min_reps: 2
+      duration_s: [1200, 3600]
+      power_pct_ftp: [80, 90]
+      max_duration_spread_pct: 10
+      max_power_spread_pct: 8
+      whole_activity_if: [0.76, 0.88]
 
   threshold:
     label: "Threshold / FTP Intervals"
@@ -360,6 +366,16 @@ session_types:
       - "Had to cut reps short or skip one"
       - "HR climbed disproportionately to power (cardiac drift — athlete wasn't fresh)"
       - "First rep materially harder than target (classic pacing error — cost them later)"
+    recognition:
+      mode: intervals
+      priority: 50
+      keywords: [threshold, sweet spot, sweetspot, lt2, ftp]
+      min_reps: 2
+      duration_s: [480, 1800]
+      power_pct_ftp: [90, 105]
+      max_duration_spread_pct: 20
+      max_power_spread_pct: 10
+      whole_activity_if: [0.88, 1.05]
 
   over_unders:
     label: "Over-Unders"
@@ -375,6 +391,10 @@ session_types:
       claiming phase-level compliance.
     red_flags:
       - "Structured phase data shows the prescribed oscillation was not executed"
+    recognition:
+      mode: text_only
+      priority: 20
+      keywords: [over under, over-under]
 
   vo2max:
     label: "VO2max Intervals"
@@ -393,6 +413,16 @@ session_types:
       - "Reps fall apart after 2–3 (recovery too short, or readiness too low)"
       - "HR never approaches expected max range (session didn't create the intended stimulus)"
       - "Cadence drops significantly across reps"
+    recognition:
+      mode: intervals
+      priority: 40
+      keywords: [sit, vo2, short intense]
+      min_reps: 3
+      duration_s: [120, 600]
+      power_pct_ftp: [105, 130]
+      max_duration_spread_pct: 35
+      max_power_spread_pct: 15
+      whole_activity_if: [1.05, 1.20]
 
   sprint_neuromuscular:
     label: "Sprints / Neuromuscular"
@@ -411,6 +441,14 @@ session_types:
     red_flags:
       - "Peak power well below recent 90-day best with no explanation (check TSB, sleep)"
       - "Significant rep-to-rep fade — suggests recovery between reps was too short"
+    recognition:
+      mode: intervals
+      priority: 30
+      keywords: [sprint, neuromuscular]
+      min_reps: 2
+      duration_s: [3, 30]
+      power_pct_ftp: [150, 9999]
+      whole_activity_if: [1.20, 9999]
 
   torque:
     label: "Torque / Low-Cadence Strength"
@@ -427,6 +465,14 @@ session_types:
     red_flags:
       - "Cadence drifted up toward normal riding cadence — defeats the purpose"
       - "Power dropped because low cadence was unsustainable at target"
+    recognition:
+      mode: intervals
+      priority: 10
+      keywords: [torque, torq sprint, torq-sprint, torq+sprint, low cadence, force]
+      min_reps: 2
+      duration_s: [60, 900]
+      power_pct_ftp: [70, 130]
+      cadence_rpm: [40, 65]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

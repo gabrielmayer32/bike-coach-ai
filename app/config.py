@@ -72,6 +72,37 @@ class ZonesConfig(BaseModel):
     coggan_7: list[ZoneDefinition] = Field(min_length=1)
 
 
+class SessionRecognitionConfig(BaseModel):
+    mode: Literal["continuous", "intervals", "text_only", "unclassified"]
+    priority: int = Field(ge=0)
+    keywords: list[str] = Field(default_factory=list)
+    min_reps: int = Field(default=1, ge=1)
+    duration_s: Optional[tuple[float, float]] = None
+    power_pct_ftp: Optional[tuple[float, float]] = None
+    cadence_rpm: Optional[tuple[float, float]] = None
+    max_duration_spread_pct: Optional[float] = Field(default=None, ge=0)
+    max_power_spread_pct: Optional[float] = Field(default=None, ge=0)
+    whole_activity_if: Optional[tuple[float, float]] = None
+
+    @model_validator(mode="after")
+    def validate_recognition_bounds(self) -> "SessionRecognitionConfig":
+        for name in ("duration_s", "power_pct_ftp", "cadence_rpm", "whole_activity_if"):
+            bounds = getattr(self, name)
+            if bounds and bounds[0] > bounds[1]:
+                raise ValueError(f"{name} lower bound must not exceed upper bound")
+        if self.mode == "intervals" and self.min_reps < 2:
+            raise ValueError("interval recognition requires at least 2 reps")
+        if self.mode == "intervals" and not any(
+            (self.duration_s, self.power_pct_ftp, self.cadence_rpm)
+        ):
+            raise ValueError("interval recognition requires an observed-data constraint")
+        if self.mode == "text_only" and not self.keywords:
+            raise ValueError("text-only recognition requires keywords")
+        if self.mode == "continuous" and not (self.keywords or self.whole_activity_if):
+            raise ValueError("continuous recognition requires keywords or an IF range")
+        return self
+
+
 class SessionTypeConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -83,6 +114,7 @@ class SessionTypeConfig(BaseModel):
     pacing_preference: Optional[str] = None
     target_cadence_rpm: Optional[float] = None
     red_flags: list[str] = Field(default_factory=list)
+    recognition: SessionRecognitionConfig
 
 
 class VerdictItem(BaseModel):
@@ -113,25 +145,7 @@ class OutputSpecConfig(BaseModel):
     instruction: str
 
 
-class ClassificationKeywordRule(BaseModel):
-    session_type: str
-    keywords: list[str] = Field(min_length=1)
-
-
-class ClassificationIfRule(BaseModel):
-    session_type: str
-    below: Optional[float] = None
-
-
 class ClassificationConfig(BaseModel):
-    keyword_priority: list[ClassificationKeywordRule]
-    low_cadence_session_type: str = "torque"
-    low_cadence_min_rpm: float = 40
-    low_cadence_max_rpm: float = 65
-    low_cadence_min_if: float = 0.7
-    low_cadence_interval_min_reps: int = Field(default=2, ge=1)
-    low_cadence_interval_min_duration_s: float = Field(default=60, ge=0)
-    if_fallback: list[ClassificationIfRule]
     default_session_type: str
 
 
@@ -141,6 +155,7 @@ class IntervalAnalysisConfig(BaseModel):
     source: Literal["device_laps"] = "device_laps"
     allow_intervals_icu_detected: Literal[False] = False
     on_missing_device_laps: Literal["activity_level_only"] = "activity_level_only"
+    ignore_recovery_fragments_shorter_than_s: float = Field(default=5, ge=0)
 
 
 class CoachingConfig(BaseModel):
@@ -164,15 +179,11 @@ class CoachingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_references(self) -> "CoachingConfig":
         known = set(self.session_types)
-        referenced = {
-            rule.session_type for rule in self.classification.keyword_priority
-        }
-        referenced.update(rule.session_type for rule in self.classification.if_fallback)
-        referenced.add(self.classification.low_cadence_session_type)
-        referenced.add(self.classification.default_session_type)
-        unknown = referenced - known
-        if unknown:
-            raise ValueError(f"classification references unknown session types: {sorted(unknown)}")
+        if self.classification.default_session_type not in known:
+            raise ValueError("classification.default_session_type is not a session type")
+        priorities = [item.recognition.priority for item in self.session_types.values()]
+        if len(priorities) != len(set(priorities)):
+            raise ValueError("session recognition priorities must be unique")
         if self.zones.default_model != "coggan_7":
             raise ValueError("only the coggan_7 zone model is currently supported")
         if self.voice.feedback_length_sentences != len(self.voice.structure):

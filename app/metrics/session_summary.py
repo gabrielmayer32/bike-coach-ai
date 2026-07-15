@@ -30,7 +30,9 @@ class SessionSummary(BaseModel):
     ftp_source: Literal["activity", "sport_settings", "missing"]
     session_type: Optional[str] = None
     interval_source_policy: Literal["device_laps"] = "device_laps"
-    interval_source: Literal["device_laps", "missing"] = "missing"
+    interval_source: Literal[
+        "device_laps", "device_laps_inferred", "missing"
+    ] = "missing"
     interval_source_detail: Optional[
         Literal[
             "activity_laps",
@@ -41,7 +43,9 @@ class SessionSummary(BaseModel):
     device_lap_count: int = 0
     interval_source_verified: bool = False
     interval_metrics_available: bool = False
-    automatic_interval_detection_used: Literal[False] = False
+    automatic_interval_detection_used: Optional[bool] = None
+    target_interval_membership_verified: bool = False
+    rep_metrics_available: bool = False
     incomplete_data_reason: Optional[str] = None
     power_zone_times_s: dict[str, float]
     hr_zone_times_s: dict[str, float]
@@ -180,16 +184,36 @@ def build_session_summary(
     interval_source_detail = (
         _device_lap_source_detail(detail) if interval_list else None
     )
-    interval_source = "device_laps" if interval_source_detail else "missing"
-    work_intervals = [interval for interval in interval_list if interval.get("is_work", True)]
-    if step_targets and len(step_targets) in (1, len(work_intervals)):
-        targets = step_targets * len(work_intervals) if len(step_targets) == 1 else step_targets
-        for interval, interval_target in zip(work_intervals, targets):
+    interval_source = (
+        "device_laps_inferred"
+        if interval_source_detail == "icu_intervals_lap_count"
+        else ("device_laps" if interval_source_detail else "missing")
+    )
+    work_intervals = [
+        interval for interval in interval_list if interval.get("is_work") is True
+    ]
+    # A generic Intervals.icu WORK label does not prove that the boundary is a
+    # prescribed work rep. Only establish target membership when resolved
+    # planned steps map one-to-one to the returned work boundaries.
+    if step_targets and len(step_targets) == len(work_intervals):
+        for interval, interval_target in zip(work_intervals, step_targets):
+            interval["is_target_work"] = True
+            interval["target_membership_source"] = "planned_step_count"
             interval["target_power_W"] = interval_target
             interval["power_compliance_pct"] = compute.power_compliance_pct(
                 interval.get("avg_power_W"), interval_target
             )
-    interval_powers = [iv.get("avg_power_W") for iv in work_intervals if iv.get("avg_power_W")]
+    target_work_intervals = [
+        interval
+        for interval in interval_list
+        if interval.get("is_target_work") is True
+    ]
+    target_membership_verified = bool(target_work_intervals)
+    interval_powers = [
+        interval.get("avg_power_W")
+        for interval in target_work_intervals
+        if interval.get("avg_power_W")
+    ]
 
     fade = compute.rep_fade_pct(interval_powers) if len(interval_powers) >= 2 else None
 
@@ -216,7 +240,7 @@ def build_session_summary(
     # ── Power compliance ──────────────────────────────────────────────────────
     interval_compliance = [
         abs(interval["power_compliance_pct"])
-        for interval in work_intervals
+        for interval in target_work_intervals
         if interval.get("power_compliance_pct") is not None
     ]
     compliance = (
@@ -236,7 +260,7 @@ def build_session_summary(
 
     # ── Assemble summary ──────────────────────────────────────────────────────
     summary: dict[str, Any] = {
-        "summary_version": 4,
+        "summary_version": 5,
         # Identity
         "activity_id": activity_id,
         "athlete_id": athlete_id,
@@ -268,15 +292,27 @@ def build_session_summary(
         "interval_source_policy": cfg["interval_analysis"]["source"],
         "interval_source_detail": interval_source_detail,
         "device_lap_count": _reported_device_lap_count(detail),
-        "interval_source_verified": interval_source == "device_laps",
+        "interval_source_verified": interval_source_detail in {
+            "activity_laps", "icu_intervals_lap_mode"
+        },
         "interval_metrics_available": bool(interval_list),
-        "automatic_interval_detection_used": cfg["interval_analysis"][
-            "allow_intervals_icu_detected"
-        ],
+        "automatic_interval_detection_used": (
+            None if interval_source_detail == "icu_intervals_lap_count" else False
+        ),
+        "target_interval_membership_verified": target_membership_verified,
+        "rep_metrics_available": bool(target_work_intervals),
         "incomplete_data_reason": (
-            None if interval_list else "device_laps_not_available"
+            "device_laps_not_available"
+            if not interval_list
+            else (
+                None
+                if target_membership_verified
+                else "planned_interval_membership_not_verified"
+            )
         ),
         "interval_count": len(work_intervals),
+        "device_interval_count": len(interval_list),
+        "target_interval_count": len(target_work_intervals),
         "interval_powers_W": interval_powers,
         "interval_details": interval_list,
         "rep_fade_pct": fade,
@@ -345,6 +381,44 @@ def _reported_device_lap_count(detail: dict) -> int:
         return 0
 
 
+def _interval_duration_s(interval: dict) -> float | None:
+    for key in ("elapsed_time", "moving_time", "duration_s"):
+        value = interval.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    start = interval.get("start_index")
+    end = interval.get("end_index")
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+        return max(0.0, float(end) - float(start))
+    return None
+
+
+def _meaningful_intervals(intervals: Any) -> list[dict]:
+    """Remove tiny recovery remnants without discarding short sprint laps."""
+    if not isinstance(intervals, list):
+        return []
+    minimum = get_coaching_config()["interval_analysis"][
+        "ignore_recovery_fragments_shorter_than_s"
+    ]
+    meaningful: list[dict] = []
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            continue
+        duration = _interval_duration_s(interval)
+        role_text = " ".join(
+            str(interval.get(key) or "")
+            for key in ("type", "lap_type", "intensity", "name", "label")
+        ).lower()
+        is_recovery = any(
+            word in role_text
+            for word in ("recovery", "rest", "warmup", "warm-up", "cooldown", "cool-down")
+        )
+        if duration is not None and duration < minimum and is_recovery:
+            continue
+        meaningful.append(interval)
+    return meaningful
+
+
 def _icu_intervals_correlate_with_device_laps(detail: dict) -> bool:
     """Recognise lap-derived intervals when the API omits its legacy lap-mode flag.
 
@@ -367,18 +441,17 @@ def _icu_intervals_correlate_with_device_laps(detail: dict) -> bool:
         return False
 
     lap_count = _reported_device_lap_count(detail)
-    intervals = detail.get("icu_intervals")
+    intervals = _meaningful_intervals(detail.get("icu_intervals"))
     return (
         lap_count > 1
-        and isinstance(intervals, list)
         and 0 < len(intervals) <= lap_count
-        and isinstance(intervals[0], dict)
     )
 
 
 def _has_meaningful_device_laps(laps: Any) -> bool:
     """Ignore the single generic session lap present in many activity files."""
-    if not isinstance(laps, list) or not laps or not isinstance(laps[0], dict):
+    laps = _meaningful_intervals(laps)
+    if not laps:
         return False
     if len(laps) > 1:
         return True
@@ -415,9 +488,9 @@ def _device_lap_source_detail(detail: dict) -> str | None:
 def _device_lap_payload(detail: dict) -> list[dict]:
     source = _device_lap_source_detail(detail)
     if source == "activity_laps":
-        return detail["laps"]
+        return _meaningful_intervals(detail["laps"])
     if source in {"icu_intervals_lap_mode", "icu_intervals_lap_count"}:
-        return detail["icu_intervals"]
+        return _meaningful_intervals(detail["icu_intervals"])
     return []
 
 
@@ -502,6 +575,10 @@ def _extract_interval_list(
                 "label": lap.get("label") or lap.get("name"),
                 "interval_type": lap.get("type") or lap.get("lap_type") or lap.get("intensity"),
                 "is_work": _is_work_lap(lap),
+                # WORK/RECOVERY here is Intervals' generic segmentation. It is
+                # deliberately separate from membership in the prescribed set.
+                "is_target_work": None,
+                "target_membership_source": "unverified",
                 "avg_power_W": float(avg_w) if avg_w else None,
                 "np_W": float(np_w) if np_w else None,
                 "vi": vi,
@@ -510,8 +587,8 @@ def _extract_interval_list(
                 "avg_torque_Nm": avg_torque,
                 "decoupling_pct": lap.get("decoupling"),
                 "training_load": lap.get("training_load"),
-                "target_power_W": target_power,
-                "power_compliance_pct": compute.power_compliance_pct(avg_w, target_power),
+                "target_power_W": None,
+                "power_compliance_pct": None,
                 "within_rep_fade_pct": stats.get("within_rep_fade_pct"),
                 "peak_5s_W": stats.get("peak_5s_W"),
                 "peak_10s_W": stats.get("peak_10s_W"),
@@ -560,7 +637,7 @@ def enrich_session_summary(summary: dict, session_type: str) -> dict:
         work_duration = sum(
             interval.get("duration_s") or 0
             for interval in summary.get("interval_details", [])
-            if interval.get("is_work", True)
+            if interval.get("is_target_work") is True
         )
         intensity_time = summary.get("vo2_time_at_intensity_s")
         summary["vo2_time_at_intensity_pct"] = (
@@ -572,12 +649,10 @@ def enrich_session_summary(summary: dict, session_type: str) -> dict:
         cadence_values = [
             interval["avg_cadence_rpm"]
             for interval in summary.get("interval_details", [])
-            if interval.get("is_work", True) and interval.get("avg_cadence_rpm")
+            if interval.get("is_target_work") is True
+            and interval.get("avg_cadence_rpm")
         ]
-        work_cadence = (
-            sum(cadence_values) / len(cadence_values)
-            if cadence_values else summary.get("avg_cadence_rpm")
-        )
+        work_cadence = sum(cadence_values) / len(cadence_values) if cadence_values else None
         target_cadence = session_cfg.get("target_cadence_rpm")
         summary["torque_cadence_deviation_rpm"] = (
             round(abs(work_cadence - target_cadence), 1)

@@ -63,7 +63,28 @@ def test_config_enforces_device_laps_without_auto_detected_fallback():
         "source": "device_laps",
         "allow_intervals_icu_detected": False,
         "on_missing_device_laps": "activity_level_only",
+        "ignore_recovery_fragments_shorter_than_s": 5.0,
     }
+
+
+def test_every_session_type_owns_a_recognition_signature():
+    cfg = config.get_coaching_config()
+    assert cfg["classification"] == {"default_session_type": "unclassified"}
+    assert set(cfg["session_types"]) == {
+        "unclassified",
+        "recovery",
+        "endurance_z2",
+        "tempo",
+        "threshold",
+        "over_unders",
+        "vo2max",
+        "sprint_neuromuscular",
+        "torque",
+    }
+    assert all(
+        session["recognition"].get("mode")
+        for session in cfg["session_types"].values()
+    )
 
 
 def test_activity_detail_requests_positioned_intervals(monkeypatch):
@@ -358,6 +379,49 @@ def test_more_detected_intervals_than_reported_laps_are_rejected():
     assert _extract_interval_list(detail, {"watts": [300.0] * 60}, 300, None) == []
 
 
+def test_tiny_residual_fragment_does_not_hide_five_device_laps():
+    meaningful = [
+        {
+            "type": "WORK",
+            "start_index": index * 100,
+            "end_index": (index + 1) * 100,
+            "moving_time": duration,
+            "average_watts": power,
+        }
+        for index, (duration, power) in enumerate([
+            (1231, 196),
+            (1800, 308),
+            (600, 220),
+            (1801, 296),
+            (4384, 180),
+        ])
+    ]
+    detail = {
+        "icu_lap_count": 5,
+        "icu_intervals": meaningful + [{
+            "type": "RECOVERY",
+            "moving_time": 2,
+            "average_watts": None,
+        }],
+    }
+    intervals = _extract_interval_list(detail, {}, 350, None)
+    assert len(intervals) == 5
+    assert all(interval["duration_s"] >= 5 for interval in intervals)
+    assert all(interval["is_target_work"] is None for interval in intervals)
+
+
+def test_short_work_sprint_is_not_removed_as_a_residual_fragment():
+    detail = {
+        "icu_lap_count": 2,
+        "icu_intervals": [
+            {"type": "WORK", "moving_time": 3, "average_watts": 900},
+            {"type": "RECOVERY", "moving_time": 30, "average_watts": 100},
+        ],
+    }
+    intervals = _extract_interval_list(detail, {}, 300, None)
+    assert [interval["duration_s"] for interval in intervals] == [3, 30]
+
+
 def test_verified_lap_mode_uses_positioned_icu_intervals_and_stream_metrics():
     detail = {
         "use_laps_for_power_intervals": True,
@@ -402,6 +466,7 @@ def test_low_cadence_device_work_laps_classify_torque_over_if_fallback():
     summary = {
         "name": "Aigle Road Cycling",
         "planned_workout": {},
+        "ftp_W": 300,
         "if_value": 0.755,
         "avg_cadence_rpm": 86,
         "interval_source": "device_laps",
@@ -421,6 +486,162 @@ def test_low_cadence_device_work_laps_classify_torque_over_if_fallback():
         ],
     }
     assert _classify_session(summary) == "torque"
+
+
+def test_two_comparable_30m_tempo_intervals_override_whole_ride_if():
+    summary = {
+        "name": "CHAUD",
+        "planned_workout": {},
+        "ftp_W": 350,
+        "if_value": 0.723,
+        "avg_cadence_rpm": 87.8,
+        "interval_source": "device_laps_inferred",
+        "interval_details": [
+            {"duration_s": 1408, "avg_power_W": 196, "is_work": True},
+            {"duration_s": 1919, "avg_power_W": 308, "is_work": True},
+            {"duration_s": 793, "avg_power_W": 220, "is_work": True},
+            {"duration_s": 1801, "avg_power_W": 296, "is_work": True},
+            {"duration_s": 5067, "avg_power_W": 180, "is_work": True},
+        ],
+    }
+    assert _classify_session(summary) == "tempo"
+    assert summary["session_type_source"] == "configured_interval_signature"
+    assert summary["session_type_evidence"] == {
+        "signature_session_type": "tempo",
+        "matched_interval_count": 2,
+        "interval_indices": [1, 3],
+        "durations_s": [1919, 1801],
+        "avg_power_W": [308, 296],
+        "power_pct_ftp": [88.0, 84.6],
+        "avg_cadence_rpm": [None, None],
+        "duration_spread_pct": 6.3,
+        "power_spread_pct": 4.0,
+    }
+
+
+def test_non_comparable_long_efforts_do_not_infer_tempo_pattern():
+    summary = {
+        "name": "Road ride",
+        "planned_workout": {},
+        "ftp_W": 350,
+        "if_value": 0.723,
+        "avg_cadence_rpm": 88,
+        "interval_source": "device_laps_inferred",
+        "interval_details": [
+            {"duration_s": 1800, "avg_power_W": 308, "is_work": True},
+            {"duration_s": 1200, "avg_power_W": 282, "is_work": True},
+        ],
+    }
+    assert _classify_session(summary) == "endurance_z2"
+    assert summary["session_type_source"] == "configured_whole_activity_if"
+
+
+@pytest.mark.parametrize(
+    ("session_type", "duration_s", "powers"),
+    [
+        ("threshold", 900, [290, 295]),
+        ("vo2max", 240, [330, 335, 340]),
+        ("sprint_neuromuscular", 10, [500, 520]),
+    ],
+)
+def test_generic_interval_signatures_classify_supported_sessions(
+    session_type, duration_s, powers
+):
+    summary = {
+        "name": "Road ride",
+        "planned_workout": {},
+        "ftp_W": 300,
+        "if_value": 0.7,
+        "interval_source": "device_laps_inferred",
+        "interval_details": [
+            {
+                "duration_s": duration_s,
+                "avg_power_W": power,
+                "avg_cadence_rpm": 90,
+                "is_work": True,
+            }
+            for power in powers
+        ],
+    }
+    assert _classify_session(summary) == session_type
+    assert summary["session_type_source"] == "configured_interval_signature"
+    assert summary["session_type_evidence"]["signature_session_type"] == session_type
+
+
+@pytest.mark.parametrize(
+    ("if_value", "session_type"),
+    [
+        (0.50, "recovery"),
+        (0.70, "endurance_z2"),
+        (0.80, "tempo"),
+        (0.95, "threshold"),
+        (1.10, "vo2max"),
+        (1.30, "sprint_neuromuscular"),
+    ],
+)
+def test_configured_whole_activity_if_ranges_are_generic_fallbacks(
+    if_value, session_type
+):
+    summary = {
+        "name": "Road ride",
+        "planned_workout": {},
+        "ftp_W": 300,
+        "if_value": if_value,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == session_type
+    assert summary["session_type_source"] == "configured_whole_activity_if"
+
+
+def test_missing_classification_evidence_returns_unclassified():
+    summary = {
+        "name": "Road ride",
+        "planned_workout": {},
+        "ftp_W": None,
+        "if_value": None,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == "unclassified"
+    assert summary["session_type_source"] == "unclassified_fallback"
+
+
+def test_text_only_signature_can_name_over_unders_without_phase_claims():
+    summary = {
+        "name": "Over-under road session",
+        "planned_workout": {},
+        "ftp_W": 300,
+        "if_value": 0.7,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == "over_unders"
+    assert summary["session_type_source"] == "activity_text"
+
+
+def test_keyword_matching_does_not_match_substrings():
+    summary = {
+        "name": "Visit the coast",
+        "planned_workout": {},
+        "ftp_W": 300,
+        "if_value": 0.7,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == "endurance_z2"
+    assert summary["session_type_source"] == "configured_whole_activity_if"
+
+
+def test_planned_description_recovery_phase_does_not_override_workout_name():
+    summary = {
+        "name": "Road ride",
+        "planned_workout": {
+            "name": "VO2 5x4",
+            "description": "Warm up easy, then recover between hard efforts",
+        },
+        "ftp_W": 300,
+        "if_value": 0.7,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == "vo2max"
+    assert summary["session_type_source"] == "planned_workout_name"
 
 
 def test_missing_device_laps_preserves_activity_analysis_with_provenance(monkeypatch):
@@ -457,11 +678,89 @@ def test_summary_exposes_reported_device_lap_count(monkeypatch):
         {"sportSettings": [{"types": ["Ride"], "ftp": 300}]},
     )
     summary = build_session_summary("athlete", "activity", {})
-    assert summary["summary_version"] == 4
+    assert summary["summary_version"] == 5
     assert summary["device_lap_count"] == 4
-    assert summary["interval_source"] == "device_laps"
+    assert summary["interval_source"] == "device_laps_inferred"
     assert summary["interval_source_detail"] == "icu_intervals_lap_count"
-    assert summary["interval_source_verified"] is True
+    assert summary["interval_source_verified"] is False
+    assert summary["automatic_interval_detection_used"] is None
+    assert summary["target_interval_membership_verified"] is False
+    assert summary["rep_metrics_available"] is False
+    assert summary["rep_fade_pct"] is None
+    assert summary["incomplete_data_reason"] == "planned_interval_membership_not_verified"
+
+
+def test_unlinked_work_labels_do_not_create_torque_penalties():
+    summary = {
+        "summary_version": 5,
+        "activity_id": "activity",
+        "athlete_id": "athlete",
+        "date": "2026-07-15",
+        "name": "Road ride",
+        "type": "Ride",
+        "is_indoor": False,
+        "ftp_W": 300,
+        "ftp_source": "activity",
+        "interval_details": [
+            {"is_work": True, "is_target_work": None, "avg_cadence_rpm": 55},
+            {"is_work": True, "is_target_work": None, "avg_cadence_rpm": 85},
+        ],
+        "power_zone_times_s": {},
+        "hr_zone_times_s": {},
+        "avg_cadence_rpm": 86,
+    }
+    enrich_session_summary(summary, "torque")
+    assert summary["torque_cadence_deviation_rpm"] is None
+
+
+def test_one_to_one_planned_steps_enable_rep_metrics(monkeypatch):
+    detail = _detail(
+        icu_ftp=300,
+        use_laps_for_power_intervals=True,
+        icu_intervals=[
+            {
+                "type": "WORK",
+                "start_index": 0,
+                "end_index": 59,
+                "moving_time": 60,
+                "average_watts": 300,
+            },
+            {
+                "type": "WORK",
+                "start_index": 60,
+                "end_index": 119,
+                "moving_time": 60,
+                "average_watts": 285,
+            },
+        ],
+    )
+    _mock_summary_apis(
+        monkeypatch,
+        detail,
+        {"sportSettings": [{"types": ["Ride"], "ftp": 300}]},
+    )
+    monkeypatch.setattr(
+        icu,
+        "get_planned_workout",
+        lambda *_: {
+            "name": "Threshold reps",
+            "workout_doc": {
+                "steps": [
+                    {"target_watts": 300},
+                    {"target_watts": 290},
+                ]
+            },
+        },
+    )
+    summary = build_session_summary("athlete", "activity", {})
+    assert summary["target_interval_membership_verified"] is True
+    assert summary["rep_metrics_available"] is True
+    assert summary["target_interval_count"] == 2
+    assert summary["rep_fade_pct"] == 5.0
+    assert [
+        interval["target_membership_source"]
+        for interval in summary["interval_details"]
+    ] == ["planned_step_count", "planned_step_count"]
 
 
 def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():
@@ -472,6 +771,10 @@ def test_prompt_consumes_configured_session_metadata_and_dynamic_structure():
     assert "torque_cadence_deviation_rpm" in prompt
     assert "Accepted interval source: device_laps only" in prompt
     assert "Missing device laps are incomplete data, not a performance failure" in prompt
+    assert "generic interval is_work" in prompt
+    assert "target_interval_membership_verified is false" in prompt
+    assert "session_type_source=configured_interval_signature" in prompt
+    assert "Recognition signature:" in prompt
 
 
 def test_historical_settings_control_enablement_and_fields(monkeypatch):

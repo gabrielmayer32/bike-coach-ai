@@ -8,7 +8,9 @@ process_activity() directly.
 """
 
 import logging
+import re
 from datetime import date, timedelta
+from itertools import combinations
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -186,57 +188,156 @@ def stop_scheduler() -> None:
 
 def _classify_session(summary: dict) -> str:
     """
-    Heuristic classifier — maps an activity to one of the coaching_config session_types.
-    Priority: planned workout text → activity name → physiological signals → IF fallback.
+    Map an activity using coach-owned recognition signatures.
+
+    Priority: planned workout text, completed title, observed interval signatures,
+    configured whole-activity IF ranges, then the honest unclassified fallback.
     """
-    cfg = get_coaching_config()["classification"]
+    cfg = get_coaching_config()
+    classification = cfg["classification"]
+    session_types = sorted(
+        cfg["session_types"].items(),
+        key=lambda item: item[1]["recognition"]["priority"],
+    )
     planned = summary.get("planned_workout") or {}
-    text = " ".join(
-        str(value or "")
-        for value in (
-            planned.get("name"),
-            planned.get("description"),
-            summary.get("name"),
-        )
-    ).lower()
-    if_val = summary.get("if_value") or 0
-    avg_cad = summary.get("avg_cadence_rpm") or 0
+    # Use the planned workout name for intent. Descriptions commonly contain
+    # words such as "easy" and "recovery" for non-target phases.
+    planned_text = str(planned.get("name") or "").lower()
+    activity_text = str(summary.get("name") or "").lower()
 
-    for rule in cfg["keyword_priority"]:
-        if any(keyword.lower() in text for keyword in rule["keywords"]):
-            return rule["session_type"]
-
-    # Whole-ride cadence is normally much higher than cadence during torque
-    # reps. Prefer the accepted device-lap work intervals when they are present.
-    low_cadence_work_reps = 0
-    if summary.get("interval_source") == "device_laps":
-        for interval in summary.get("interval_details") or []:
-            cadence = interval.get("avg_cadence_rpm")
-            duration = interval.get("duration_s") or 0
-            if (
-                interval.get("is_work", True)
-                and cadence is not None
-                and cfg["low_cadence_min_rpm"] <= cadence <= cfg["low_cadence_max_rpm"]
-                and duration >= cfg["low_cadence_interval_min_duration_s"]
-            ):
-                low_cadence_work_reps += 1
-    if low_cadence_work_reps >= cfg["low_cadence_interval_min_reps"]:
-        return cfg["low_cadence_session_type"]
-
-    # Low cadence sustained → torque session
-    if (
-        avg_cad
-        and cfg["low_cadence_min_rpm"] <= avg_cad <= cfg["low_cadence_max_rpm"]
-        and if_val > cfg["low_cadence_min_if"]
+    for source, text in (
+        ("planned_workout_name", planned_text),
+        ("activity_text", activity_text),
     ):
-        return cfg["low_cadence_session_type"]
+        if not text.strip():
+            continue
+        for session_type, session_cfg in session_types:
+            keywords = session_cfg["recognition"].get("keywords", [])
+            matched_keyword = next(
+                (keyword for keyword in keywords if _text_has_keyword(text, keyword)),
+                None,
+            )
+            if matched_keyword:
+                summary["session_type_source"] = source
+                summary["session_type_evidence"] = {
+                    "matched_keyword": matched_keyword,
+                    "matched_text": text,
+                }
+                return session_type
 
-    # IF-based fallback when name gives no signal
-    for rule in cfg["if_fallback"]:
-        if rule.get("below") is not None and if_val < rule["below"]:
-            return rule["session_type"]
+    for session_type, session_cfg in session_types:
+        recognition = session_cfg["recognition"]
+        if recognition["mode"] != "intervals":
+            continue
+        evidence = _match_interval_signature(summary, session_type, recognition)
+        if evidence:
+            summary["session_type_source"] = "configured_interval_signature"
+            summary["session_type_evidence"] = evidence
+            return session_type
 
-    return cfg["default_session_type"]
+    if_value = summary.get("if_value")
+    if if_value is not None:
+        for session_type, session_cfg in session_types:
+            if_bounds = session_cfg["recognition"].get("whole_activity_if")
+            if if_bounds and if_bounds[0] <= if_value < if_bounds[1]:
+                summary["session_type_source"] = "configured_whole_activity_if"
+                summary["session_type_evidence"] = {
+                    "if_value": if_value,
+                    "configured_range": if_bounds,
+                }
+                return session_type
+
+    summary["session_type_source"] = "unclassified_fallback"
+    summary["session_type_evidence"] = {}
+    return classification["default_session_type"]
+
+
+def _text_has_keyword(text: str, keyword: str) -> bool:
+    """Match a configured word or phrase without accidental substrings."""
+    return bool(re.search(rf"(?<!\w){re.escape(keyword.lower())}(?!\w)", text))
+
+
+def _match_interval_signature(
+    summary: dict,
+    session_type: str,
+    signature: dict,
+) -> dict | None:
+    """Return evidence when observed boundaries match a configured signature."""
+    ftp = summary.get("ftp_W")
+    power_bounds = signature.get("power_pct_ftp")
+    if power_bounds and not ftp:
+        return None
+
+    candidates = []
+    for index, interval in enumerate(summary.get("interval_details") or []):
+        if interval.get("is_work") is False:
+            continue
+        duration = interval.get("duration_s") or 0
+        power = interval.get("avg_power_W")
+        cadence = interval.get("avg_cadence_rpm")
+        duration_bounds = signature.get("duration_s")
+        cadence_bounds = signature.get("cadence_rpm")
+        if duration_bounds and not duration_bounds[0] <= duration <= duration_bounds[1]:
+            continue
+        if cadence_bounds and (
+            cadence is None or not cadence_bounds[0] <= cadence <= cadence_bounds[1]
+        ):
+            continue
+        power_pct = power / ftp * 100 if power and ftp else None
+        if power_bounds and (
+            power_pct is None or not power_bounds[0] <= power_pct <= power_bounds[1]
+        ):
+            continue
+        candidates.append({
+            "index": index,
+            "duration_s": duration,
+            "avg_power_W": power,
+            "power_pct_ftp": round(power_pct, 1) if power_pct is not None else None,
+            "avg_cadence_rpm": cadence,
+        })
+
+    max_duration_spread = signature.get("max_duration_spread_pct")
+    max_power_spread = signature.get("max_power_spread_pct")
+    candidate_groups = (
+        [tuple(candidates)]
+        if (
+            len(candidates) >= signature["min_reps"]
+            and max_duration_spread is None
+            and max_power_spread is None
+        )
+        else combinations(candidates, signature["min_reps"])
+    )
+    for matched in candidate_groups:
+        durations = [item["duration_s"] for item in matched]
+        powers = [item["avg_power_W"] for item in matched if item["avg_power_W"]]
+        duration_mean = sum(durations) / len(durations)
+        duration_spread = (max(durations) - min(durations)) / duration_mean * 100
+        power_spread = None
+        if powers:
+            power_mean = sum(powers) / len(powers)
+            power_spread = (max(powers) - min(powers)) / power_mean * 100
+        if max_duration_spread is not None and duration_spread > max_duration_spread:
+            continue
+        if (
+            max_power_spread is not None
+            and power_spread is not None
+            and power_spread > max_power_spread
+        ):
+            continue
+        return {
+            "signature_session_type": session_type,
+            "matched_interval_count": len(matched),
+            "interval_indices": [item["index"] for item in matched],
+            "durations_s": durations,
+            "avg_power_W": [item["avg_power_W"] for item in matched],
+            "power_pct_ftp": [item["power_pct_ftp"] for item in matched],
+            "avg_cadence_rpm": [item["avg_cadence_rpm"] for item in matched],
+            "duration_spread_pct": round(duration_spread, 1),
+            "power_spread_pct": (
+                round(power_spread, 1) if power_spread is not None else None
+            ),
+        }
+    return None
 
 
 def _add_sprint_benchmark(summary: dict, athlete_id: str) -> None:
