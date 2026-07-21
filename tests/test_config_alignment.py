@@ -170,6 +170,15 @@ def test_athlete_template_displays_live_profile_ftp_not_cached_activity_ftp():
     assert "{{ athlete.ftp_W|int }}W" not in template
 
 
+def test_reanalysis_polling_preserves_analysis_id_across_reload_and_retry():
+    template = Path("app/templates/athlete.html").read_text()
+    assert "afterId: currentAnalysisId" in template
+    assert "for (const {id: actId, afterId} of inflight)" in template
+    assert "pollForResult(actId, afterId)" in template
+    assert "const retryCall = afterId != null" in template
+    assert '? "triggerReanalyse(\'" + ATHLETE_ID' in template
+
+
 def test_configured_ftp_selects_matching_indoor_and_outdoor_values():
     profile = {
         "sportSettings": [{

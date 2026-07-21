@@ -597,7 +597,7 @@ function saveInflight(arr) {
 
 function triggerReanalyse(athleteId, activityId, currentAnalysisId) {
   const inflight = getInflight().filter(x => x.id !== activityId);
-  inflight.push({id: activityId, startedAt: Date.now()});
+  inflight.push({id: activityId, startedAt: Date.now(), afterId: currentAnalysisId});
   saveInflight(inflight);
 
   document.getElementById("actions-" + activityId).innerHTML = spinnerHTML();
@@ -611,7 +611,7 @@ function triggerReanalyse(athleteId, activityId, currentAnalysisId) {
 
 function triggerAnalyse(athleteId, activityId) {
   const inflight = getInflight().filter(x => x.id !== activityId);
-  inflight.push({id: activityId, startedAt: Date.now()});
+  inflight.push({id: activityId, startedAt: Date.now(), afterId: null});
   saveInflight(inflight);
 
   document.getElementById("actions-" + activityId).innerHTML = spinnerHTML();
@@ -637,7 +637,10 @@ function pollForResult(activityId, afterId) {
         const inflight = getInflight().filter(x => x.id !== activityId);
         saveInflight(inflight);
         const el = document.getElementById("actions-" + activityId);
-        if (el) el.innerHTML = '<span style="font-size:11px;color:#ef4444;">Analysis failed — <button class="btn btn-sm" onclick="triggerAnalyse(\'' + ATHLETE_ID + '\',\'' + activityId + '\',this)">Retry</button></span>';
+        const retryCall = afterId != null
+          ? "triggerReanalyse('" + ATHLETE_ID + "','" + activityId + "'," + afterId + ")"
+          : "triggerAnalyse('" + ATHLETE_ID + "','" + activityId + "')";
+        if (el) el.innerHTML = '<span style="font-size:11px;color:#ef4444;">Analysis failed — <button class="btn btn-sm" onclick="' + retryCall + '">Retry</button></span>';
         const rowEl = document.getElementById("row-" + activityId);
         if (rowEl) rowEl.classList.remove("analysing-row");
       } else {
@@ -652,16 +655,16 @@ function pollForResult(activityId, afterId) {
   const inflight = getInflight();
   // Filter out timed-out ones
   saveInflight(inflight);
-  for (const {id: actId} of inflight) {
+  for (const {id: actId, afterId} of inflight) {
     const actionsEl = document.getElementById("actions-" + actId);
     if (actionsEl) {
       actionsEl.innerHTML = spinnerHTML();
       const rowEl = document.getElementById("row-" + actId);
       rowEl && rowEl.classList.add("analysing-row");
-      pollForResult(actId);
+      pollForResult(actId, afterId);
     } else {
       // Activity not on this page (different athlete / date range) — keep polling silently
-      pollForResult(actId);
+      pollForResult(actId, afterId);
     }
   }
 })();
