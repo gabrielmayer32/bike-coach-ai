@@ -67,7 +67,7 @@ def test_config_enforces_device_laps_without_auto_detected_fallback():
         "source": "device_laps",
         "allow_intervals_icu_detected": False,
         "on_missing_device_laps": "activity_level_only",
-        "ignore_recovery_fragments_shorter_than_s": 5.0,
+        "ignore_recovery_fragments_shorter_than_s": 10.0,
     }
 
 
@@ -407,15 +407,14 @@ def test_tiny_residual_fragment_does_not_hide_five_device_laps():
     ]
     detail = {
         "icu_lap_count": 5,
-        "icu_intervals": meaningful + [{
-            "type": "RECOVERY",
-            "moving_time": 2,
-            "average_watts": None,
-        }],
+        "icu_intervals": meaningful + [
+            {"type": "RECOVERY", "moving_time": 6, "average_watts": None},
+            {"type": "RECOVERY", "moving_time": 3, "average_watts": None},
+        ],
     }
     intervals = _extract_interval_list(detail, {}, 350, None)
     assert len(intervals) == 5
-    assert all(interval["duration_s"] >= 5 for interval in intervals)
+    assert all(interval["duration_s"] >= 10 for interval in intervals)
     assert all(interval["is_target_work"] is None for interval in intervals)
 
 
@@ -547,6 +546,20 @@ def test_non_comparable_long_efforts_do_not_infer_tempo_pattern():
     }
     assert _classify_session(summary) == "endurance_z2"
     assert summary["session_type_source"] == "configured_whole_activity_if"
+
+
+def test_over_unders_title_tolerates_spaced_hyphens_and_plural():
+    summary = {
+        "name": "Black River - Over - Unders",
+        "planned_workout": {},
+        "ftp_W": 232,
+        "if_value": 0.849,
+        "target_interval_membership_verified": False,
+        "interval_details": [],
+    }
+    assert _classify_session(summary) == "over_unders"
+    assert summary["session_type_source"] == "activity_text"
+    assert summary["analysis_constraints"]["planned_roles_verified"] is False
 
 
 @pytest.mark.parametrize(

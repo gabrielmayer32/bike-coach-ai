@@ -215,12 +215,23 @@ def _validate_analysis_grounding(
     session_summary: dict,
 ) -> None:
     """Reject invented phase roles and unsupported verdict penalties."""
-    if session_summary.get("session_type_source") != "configured_interval_signature":
-        return
     if session_summary.get("target_interval_membership_verified"):
         return
 
-    policy = get_coaching_config()["inferred_session_policy"]
+    cfg = get_coaching_config()
+    policy = cfg["inferred_session_policy"]
+    session_type = session_summary.get("session_type")
+    recognition_mode = (
+        cfg["session_types"].get(session_type, {}).get("recognition", {}).get("mode")
+        if session_type
+        else None
+    )
+    if not (
+        session_summary.get("analysis_constraints")
+        or session_summary.get("session_type_source") == "configured_interval_signature"
+        or recognition_mode in {"intervals", "text_only"}
+    ):
+        return
     text = " ".join([
         *result.key_observations,
         result.reasoning,

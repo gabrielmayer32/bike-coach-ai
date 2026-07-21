@@ -171,7 +171,7 @@ interval_analysis:
   allow_intervals_icu_detected: false
   on_missing_device_laps: activity_level_only
   # Ignore tiny residual fragments Intervals may append around device lap boundaries.
-  ignore_recovery_fragments_shorter_than_s: 5
+  ignore_recovery_fragments_shorter_than_s: 10
 
 # How to discuss a session inferred from completed data when its calendar workout
 # is not linked. These rules protect trust: missing context is never athlete fault.
@@ -410,7 +410,7 @@ session_types:
     recognition:
       mode: text_only
       priority: 20
-      keywords: [over under, over-under]
+      keywords: [over under, over unders, over-under, over-unders]
 
   vo2max:
     label: "VO2max Intervals"

@@ -223,6 +223,11 @@ def _classify_session(summary: dict) -> str:
                     "matched_keyword": matched_keyword,
                     "matched_text": text,
                 }
+                if (
+                    not summary.get("target_interval_membership_verified")
+                    and session_cfg["recognition"]["mode"] in {"intervals", "text_only"}
+                ):
+                    _apply_inferred_session_policy(summary, session_type, {})
                 return session_type
 
     for session_type, session_cfg in session_types:
@@ -246,6 +251,11 @@ def _classify_session(summary: dict) -> str:
                     "if_value": if_value,
                     "configured_range": if_bounds,
                 }
+                if (
+                    not summary.get("target_interval_membership_verified")
+                    and session_cfg["recognition"]["mode"] in {"intervals", "text_only"}
+                ):
+                    _apply_inferred_session_policy(summary, session_type, {})
                 return session_type
 
     summary["session_type_source"] = "unclassified_fallback"
@@ -254,8 +264,15 @@ def _classify_session(summary: dict) -> str:
 
 
 def _text_has_keyword(text: str, keyword: str) -> bool:
-    """Match a configured word or phrase without accidental substrings."""
-    return bool(re.search(rf"(?<!\w){re.escape(keyword.lower())}(?!\w)", text))
+    """Match configured phrases across harmless space, dash and underscore variants."""
+    normalized_text = re.sub(r"[\s_-]+", " ", text.lower()).strip()
+    normalized_keyword = re.sub(r"[\s_-]+", " ", keyword.lower()).strip()
+    return bool(
+        re.search(
+            rf"(?<!\w){re.escape(normalized_keyword)}(?!\w)",
+            normalized_text,
+        )
+    )
 
 
 def _apply_inferred_session_policy(

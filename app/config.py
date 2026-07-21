@@ -155,7 +155,7 @@ class IntervalAnalysisConfig(BaseModel):
     source: Literal["device_laps"] = "device_laps"
     allow_intervals_icu_detected: Literal[False] = False
     on_missing_device_laps: Literal["activity_level_only"] = "activity_level_only"
-    ignore_recovery_fragments_shorter_than_s: float = Field(default=5, ge=0)
+    ignore_recovery_fragments_shorter_than_s: float = Field(default=10, ge=0)
 
 
 class InferredSessionPolicyConfig(BaseModel):
